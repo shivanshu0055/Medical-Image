@@ -1,0 +1,3 @@
+"""
+MedBoard — tests package
+"""

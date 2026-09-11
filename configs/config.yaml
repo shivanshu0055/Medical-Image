@@ -1,0 +1,123 @@
+# ============================================================
+# MedBoard — Central Configuration
+# All paths are relative to the project root (d:/Projects/Major)
+# ============================================================
+
+project:
+  name: "MedBoard"
+  version: "0.1.0"
+  description: "Multi-Agent Brain MRI Analysis & Preliminary Reporting System"
+  academic_disclaimer: >
+    MedBoard is an academic prototype for research purposes only.
+    It is NOT a clinical diagnostic tool. Results must not be used
+    for medical decision-making without qualified medical review.
+
+# ─── Data ────────────────────────────────────────────────────
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  samples_dir: "data/samples"
+  dataset_name: "brisc2025"
+
+  # BRISC 2025 structure (after Kaggle download)
+  classification:
+    train_dir: "data/raw/classification_task/train"
+    test_dir:  "data/raw/classification_task/test"
+
+  segmentation:
+    train_images: "data/raw/segmentation_task/train/images"
+    train_masks:  "data/raw/segmentation_task/train/masks"
+    test_images:  "data/raw/segmentation_task/test/images"
+    test_masks:   "data/raw/segmentation_task/test/masks"
+
+  classes:
+    - "glioma"
+    - "meningioma"
+    - "pituitary"
+    - "no_tumor"
+
+  num_classes: 4
+
+# ─── Preprocessing ───────────────────────────────────────────
+preprocessing:
+  # Input image sizes
+  image_size_clf: 224        # Classification input (224x224 for EfficientNet-B0)
+  image_size_seg: 256        # Segmentation input (256x256 for U-Net)
+
+  # ImageNet normalization stats (used for classification with pretrained backbone)
+  normalize_mean: [0.485, 0.456, 0.406]
+  normalize_std:  [0.229, 0.224, 0.225]
+
+  # Augmentation (training only)
+  augmentation:
+    horizontal_flip: true
+    vertical_flip: false
+    rotation_degrees: 15
+    brightness_jitter: 0.2
+    contrast_jitter: 0.2
+
+# ─── Classification Model ────────────────────────────────────
+classification:
+  backbone: "efficientnet_b0"
+  num_classes: 4
+  pretrained: true
+  weights_path: "models/classification/efficientnet_b0_brisc.pth"
+
+  # Training hyperparameters
+  batch_size: 16
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  epochs: 25
+  lr_scheduler: "cosine"     # cosine annealing
+  early_stopping_patience: 5
+
+# ─── Segmentation Model ──────────────────────────────────────
+segmentation:
+  architecture: "unet"
+  in_channels: 3
+  out_channels: 1            # Binary mask
+  base_features: 32          # U-Net feature map start size (32 → 64 → 128 → 256)
+  weights_path: "models/segmentation/unet_brisc.pth"
+
+  # Training hyperparameters
+  batch_size: 8
+  learning_rate: 0.0001
+  epochs: 40
+  loss: "dice_bce"           # Dice + Binary Cross-Entropy combined
+  early_stopping_patience: 7
+
+  # Inference threshold
+  mask_threshold: 0.5        # Sigmoid output threshold for binary mask
+
+# ─── Training Environment ────────────────────────────────────
+training:
+  device: "cuda"             # "cuda" or "cpu"
+  mixed_precision: true      # FP16 — saves VRAM on RTX 2050
+  num_workers: 4             # DataLoader workers
+  seed: 42
+  pin_memory: true
+
+# ─── RAG / Evidence ──────────────────────────────────────────
+rag:
+  knowledge_base_path: "rag/knowledge_base"
+  vector_store_path: "rag/vector_store"
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+  top_k: 3                   # Number of evidence snippets to retrieve
+  collection_name: "medboard_knowledge"
+
+# ─── LLM (Chief Synthesis Agent) ─────────────────────────────
+llm:
+  model: "gemini-2.0-flash"
+  max_output_tokens: 2048
+  temperature: 0.3           # Low temp for factual medical report style
+
+# ─── Outputs ─────────────────────────────────────────────────
+outputs:
+  reports_dir: "outputs/reports"
+
+# ─── Streamlit UI ────────────────────────────────────────────
+ui:
+  title: "MedBoard"
+  subtitle: "Multi-Agent Brain MRI Analysis System"
+  port: 8501
+  max_upload_size_mb: 10

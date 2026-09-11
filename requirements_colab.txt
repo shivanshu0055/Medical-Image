@@ -1,0 +1,23 @@
+# ============================================================
+# MedBoard — requirements_colab.txt
+# Use this in Google Colab cells instead of requirements.txt
+#
+# Run at the top of any Colab notebook:
+#   !pip install -q -r requirements_colab.txt
+#
+# PyTorch is pre-installed in Colab with CUDA — do NOT reinstall it.
+# ============================================================
+
+timm>=1.0.9
+monai>=1.4.0
+langchain>=0.3.0
+langgraph>=0.2.0
+langchain-google-genai>=2.0.0
+google-generativeai>=0.8.0
+chromadb>=0.5.0
+sentence-transformers>=3.0.0
+scikit-image>=0.24.0
+pyyaml>=6.0.1
+python-dotenv>=1.0.0
+plotly>=5.24.0
+kaggle>=1.6.0

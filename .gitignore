@@ -1,0 +1,45 @@
+# MedBoard — .gitignore
+
+# ─── Environment ───────────────────────────────────────────
+.env
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+
+# ─── Data (too large for git) ──────────────────────────────
+data/raw/
+data/processed/
+data/samples/
+
+# ─── Model weights ─────────────────────────────────────────
+models/segmentation/*.pth
+models/classification/*.pth
+
+# ─── Vector store ─────────────────────────────────────────
+rag/vector_store/
+
+# ─── Outputs ──────────────────────────────────────────────
+outputs/
+
+# ─── Notebooks checkpoints ────────────────────────────────
+notebooks/.ipynb_checkpoints/
+.ipynb_checkpoints/
+
+# ─── IDE ──────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+
+# ─── OS ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── Kaggle ───────────────────────────────────────────────
+*.json
+!rag/knowledge_base/*.json    # Keep knowledge base JSONs
+
+# ─── Logs ─────────────────────────────────────────────────
+*.log
+runs/
