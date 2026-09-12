@@ -340,7 +340,7 @@ def train_segmentation(
     # ── Learning Rate Scheduler ───────────────────────────────────────────────
     # If val loss doesn't improve for 3 epochs, reduce LR by factor of 0.5.
     # This helps the model fine-tune in the later stages of training.
-    scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=3, verbose=True)
+    scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=3)
 
     # ── Loss Function ─────────────────────────────────────────────────────────
     criterion = DiceBCELoss()
