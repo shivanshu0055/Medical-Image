@@ -8,9 +8,9 @@
 # PyTorch + torchvision are pre-installed in Colab with CUDA.
 # Do NOT reinstall torch here — Colab's version is fine.
 #
-# Note: pip may show warnings about google-auth / opentelemetry
-# version conflicts with Colab internals. These are harmless —
-# our ML packages work correctly regardless.
+# google-auth and google-generativeai are pre-installed in Colab.
+# Do NOT pin them here — Colab's resolver handles them internally.
+# Any version conflict warnings from pip are harmless.
 # ============================================================
 
 timm>=1.0.9
@@ -18,8 +18,8 @@ timm>=1.0.9
 langchain>=0.3.0
 langgraph>=0.2.0
 langchain-google-genai>=2.0.0
-google-generativeai>=0.8.0,<1.0.0
-google-auth==2.49.0               # pin to match Colab's internal requirement
+# google-generativeai: installed as a dependency of langchain-google-genai
+# google-auth: let Colab manage this — pinning causes conflicts
 chromadb>=0.5.0
 sentence-transformers>=3.0.0
 scikit-image>=0.24.0
