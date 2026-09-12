@@ -5,15 +5,21 @@
 # Run at the top of any Colab notebook:
 #   !pip install -q -r requirements_colab.txt
 #
-# PyTorch is pre-installed in Colab with CUDA — do NOT reinstall it.
+# PyTorch + torchvision are pre-installed in Colab with CUDA.
+# Do NOT reinstall torch here — Colab's version is fine.
+#
+# Note: pip may show warnings about google-auth / opentelemetry
+# version conflicts with Colab internals. These are harmless —
+# our ML packages work correctly regardless.
 # ============================================================
 
 timm>=1.0.9
-monai>=1.4.0
+# monai REMOVED — see requirements.txt for explanation
 langchain>=0.3.0
 langgraph>=0.2.0
 langchain-google-genai>=2.0.0
-google-generativeai>=0.8.0
+google-generativeai>=0.8.0,<1.0.0
+google-auth==2.49.0               # pin to match Colab's internal requirement
 chromadb>=0.5.0
 sentence-transformers>=3.0.0
 scikit-image>=0.24.0

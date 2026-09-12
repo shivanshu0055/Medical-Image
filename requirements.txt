@@ -1,19 +1,25 @@
 # ============================================================
 # MedBoard — requirements.txt
-# Python 3.10+
+# Python 3.13 | PyTorch 2.6.0+cu124 | RTX 2050 4GB
 #
-# IMPORTANT — PyTorch CUDA Install (run this FIRST, separately):
-#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
-#   (cu124 is required for Python 3.13 — cu121 does NOT have Python 3.13 wheels)
+# Install order (MUST follow this order):
+#   Step 1 — PyTorch CUDA (from pytorch.org, NOT PyPI):
+#     pip install torch==2.6.0+cu124 torchvision==0.21.0+cu124 --index-url https://download.pytorch.org/whl/cu124
 #
-# Then install the rest:
-#   pip install -r requirements.txt
+#   Step 2 — Everything else:
+#     pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu124
+#
+# The --extra-index-url flag below tells pip to prefer the cu124 index for
+# torch/torchvision so they are never replaced by CPU builds from PyPI.
 # ============================================================
 
-# --- Deep Learning ---
-# torch and torchvision installed separately via CUDA wheel (see above)
+# --- Deep Learning (pinned to CUDA builds) ---
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.6.0+cu124
+torchvision==0.21.0+cu124
 timm>=1.0.9                        # EfficientNet-B0 and other pretrained models
-monai>=1.4.0                       # Medical imaging transforms and utilities
+# monai REMOVED — designed for 3D NIfTI volumes; overkill for our 2D .jpg pipeline.
+# torchvision.transforms + scikit-image covers all our 2D preprocessing needs.
 
 # --- Agent Orchestration ---
 langchain>=0.3.0
