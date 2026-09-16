@@ -33,8 +33,8 @@ data:
   classes:
     - "glioma"
     - "meningioma"
-    - "pituitary"
     - "no_tumor"
+    - "pituitary"
 
   num_classes: 4
 

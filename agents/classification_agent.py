@@ -56,7 +56,7 @@ class ClassificationAgent:
         )
         self.num_classes  = self.clf_cfg.get("num_classes", 4)
         self.class_names  = self.data_cfg.get(
-            "classes", ["glioma", "meningioma", "pituitary", "no_tumor"]
+            "classes", ["glioma", "meningioma", "no_tumor", "pituitary"]
         )
         self.device_str   = self.train_cfg.get("device", "cuda")
 
