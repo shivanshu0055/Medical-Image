@@ -108,7 +108,7 @@ class ClassificationAgent:
                 self._load_model()
 
             # Preprocess image for classification: 224x224 RGB, ImageNet normalization
-            preprocessed = self.preprocessor.preprocess_for_classification(state.image_path)
+            preprocessed = self.preprocessor.preprocess_image(state.image_path, mode="classification")
 
             pred_class, confidence, probs = predict_class(
                 model=self._model,

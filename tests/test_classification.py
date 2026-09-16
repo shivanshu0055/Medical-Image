@@ -122,3 +122,23 @@ def test_classification_agent_graceful_missing_weights():
 
     assert len(updated_state.errors) > 0
     assert any("Classification model weights not found" in err for err in updated_state.errors)
+
+
+def test_classification_agent_real_inference():
+    """Verify ClassificationAgent runs end-to-end inference with real trained weights."""
+    weights_path = Path("models/classification/efficientnet_b0_brisc.pth")
+    if not weights_path.exists():
+        pytest.skip("Classification weights not found.")
+
+    test_image = next(Path("data/raw/classification_task/test/glioma").glob("*.jpg"), None)
+    if test_image is None:
+        pytest.skip("Test image not found.")
+
+    agent = ClassificationAgent()
+    state = MedBoardState(image_path=str(test_image))
+    updated_state = agent.run(state)
+
+    assert len(updated_state.errors) == 0, f"Inference errors: {updated_state.errors}"
+    assert updated_state.predicted_class in DEFAULT_CLASSES
+    assert 0.0 <= updated_state.classification_confidence <= 1.0
+    assert len(updated_state.class_probabilities) == 4
