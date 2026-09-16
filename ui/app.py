@@ -118,12 +118,19 @@ with st.sidebar:
     st.subheader("🧪 Quick Test Samples")
     st.caption("Select a sample scan from the BRISC test set:")
 
+    def find_sample_file(class_name: str) -> Optional[str]:
+        cls_folder = PROJECT_ROOT / "data" / "raw" / "classification_task" / "test" / class_name
+        if cls_folder.exists():
+            for file in sorted(cls_folder.glob("*.jpg")):
+                return str(file.relative_to(PROJECT_ROOT))
+        return None
+
     sample_dict = {
         "None (Use Upload)": None,
-        "Glioma Sample": "data/raw/classification_task/test/glioma/brisc2025_test_00001_gl_ax_t1.jpg",
-        "Meningioma Sample": "data/raw/classification_task/test/meningioma/brisc2025_test_00002_me_ax_t1.jpg",
-        "Pituitary Sample": "data/raw/classification_task/test/pituitary/brisc2025_test_00004_pi_ax_t1.jpg",
-        "No Tumor (Healthy)": "data/raw/classification_task/test/no_tumor/brisc2025_test_00003_no_ax_t1.jpg",
+        "Glioma Sample": find_sample_file("glioma"),
+        "Meningioma Sample": find_sample_file("meningioma"),
+        "Pituitary Sample": find_sample_file("pituitary"),
+        "No Tumor (Healthy)": find_sample_file("no_tumor"),
     }
 
     selected_sample = st.selectbox("Load Demo Case", list(sample_dict.keys()), index=0)
@@ -191,13 +198,17 @@ with col_input:
 
     # Handle sample selection or manual upload
     if selected_sample != "None (Use Upload)":
-        sample_path = PROJECT_ROOT / sample_dict[selected_sample]
-        if sample_path.exists():
-            image_path_to_process = str(sample_path)
-            uploaded_image_display = Image.open(image_path_to_process)
-            st.info(f"Loaded: **{selected_sample}**")
+        rel_path = sample_dict.get(selected_sample)
+        if rel_path:
+            sample_path = PROJECT_ROOT / rel_path
+            if sample_path.exists():
+                image_path_to_process = str(sample_path)
+                uploaded_image_display = Image.open(image_path_to_process)
+                st.info(f"Loaded: **{selected_sample}** (`{sample_path.name}`)")
+            else:
+                st.error(f"Sample file not found at: {sample_path}")
         else:
-            st.error(f"Sample file not found at: {sample_path}")
+            st.warning(f"No sample scans found in test folder for {selected_sample}.")
 
     uploaded_file = st.file_uploader(
         "Or Upload New MRI Scan (JPG / PNG)",
