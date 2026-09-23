@@ -1,0 +1,87 @@
+# ============================================================
+# MedBoard — UUEKAN Configuration
+# All paths are relative to project root or overridden in Colab
+# ============================================================
+
+project:
+  name: "MedBoard-UUEKAN"
+  version: "0.1.0"
+  description: "Edge-Enhanced Kolmogorov-Arnold Network (UUEKAN) for Brain MRI Segmentation on BRISC"
+  academic_disclaimer: >
+    MedBoard is an academic prototype for research purposes only.
+    It is NOT a clinical diagnostic tool. Results must not be used
+    for medical decision-making without qualified medical review.
+
+# ─── Data ────────────────────────────────────────────────────
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  dataset_name: "brisc2025"
+
+  segmentation:
+    train_images: "data/raw/segmentation_task/train/images"
+    train_masks:  "data/raw/segmentation_task/train/masks"
+    test_images:  "data/raw/segmentation_task/test/images"
+    test_masks:   "data/raw/segmentation_task/test/masks"
+
+# ─── Preprocessing ───────────────────────────────────────────
+preprocessing:
+  image_size_seg: 512        # High-resolution input matching paper
+  normalize_range: [0.0, 1.0] # Standard [0, 1] normalization for MRI
+
+  augmentation:
+    horizontal_flip: true
+    vertical_flip: true
+    rotation_degrees: 15
+    brightness_jitter: 0.1
+    contrast_jitter: 0.1
+
+# ─── UUEKAN Model Architecture ───────────────────────────────
+model:
+  name: "UUEKAN"
+  in_channels: 3
+  num_classes: 1             # Binary tumor mask
+  img_size: 512
+  embed_dims: [128, 160, 256]
+  drop_rate: 0.1
+  drop_path_rate: 0.1
+  use_uncertainty: true
+  use_edge: true
+  edge_weight: 0.5
+
+# ─── Training Hyperparameters ────────────────────────────────
+training:
+  device: "cuda"             # "cuda" or "cpu"
+  mixed_precision: true      # FP16 AMP for VRAM efficiency on Colab T4
+  num_workers: 2
+  seed: 42
+
+  # Effective batch size = batch_size * gradient_accumulation_steps = 4 * 3 = 12
+  batch_size: 4
+  gradient_accumulation_steps: 3
+  val_batch_size: 4
+
+  epochs: 50
+  learning_rate: 0.0001      # 1e-4
+  min_lr: 0.00001            # 1e-5
+  scheduler: "cosine"        # CosineAnnealingLR
+  early_stopping_patience: 10
+
+  # Loss configuration (Section 3.4 of the paper)
+  loss:
+    use_boundary: true
+    boundary_weight: 0.2
+    use_uncertainty_loss: true
+    uncertainty_loss_weight: 0.1
+    deep_supervision_weights: [1.0, 0.8, 0.6, 0.4]
+    uncertainty_config:
+      reg_weight: 1.0
+      consistency_weight: 0.5
+      threshold_reg_weight: 0.1
+      boundary_weight: 0.5
+
+# ─── Weights & Checkpoints ───────────────────────────────────
+paths:
+  weights_dir: "weights"
+  checkpoint_best: "weights/uuekan_best.pth"
+  final_weights: "weights/uuekan_brisc.pth"
