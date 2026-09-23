@@ -73,7 +73,7 @@ def compute_metrics(
 
 
 class EarlyStopping:
-    """Monitors validation Dice score and saves best model weights."""
+    """Monitors validation Dice score and saves best model checkpoints with full training state."""
 
     def __init__(self, patience: int = 10, min_delta: float = 1e-4, checkpoint_path: str = "weights/uuekan_best.pth"):
         self.patience = patience
@@ -82,15 +82,35 @@ class EarlyStopping:
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
         self.best_dice = -float("inf")
+        self.best_epoch = 0
         self.counter = 0
         self.should_stop = False
 
-    def step(self, val_dice: float, model: nn.Module) -> bool:
+    def step(
+        self,
+        val_dice: float,
+        model: nn.Module,
+        epoch: int,
+        optimizer: torch.optim.Optimizer | None = None,
+        scheduler: Any | None = None,
+        history: dict | None = None,
+    ) -> bool:
         if val_dice > self.best_dice + self.min_delta:
             self.best_dice = val_dice
+            self.best_epoch = epoch
             self.counter = 0
-            torch.save(model.state_dict(), self.checkpoint_path)
-            print(f"  [Checkpoint] Best val Dice improved to {val_dice:.4f} -> Saved to {self.checkpoint_path}")
+
+            # Save full training checkpoint dictionary
+            checkpoint = {
+                "epoch": epoch,
+                "best_dice": val_dice,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict() if optimizer is not None else None,
+                "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
+                "history": history or {},
+            }
+            torch.save(checkpoint, self.checkpoint_path)
+            print(f"  [Checkpoint] Best val Dice improved to {val_dice:.4f} (Epoch {epoch:02d}) -> Saved to {self.checkpoint_path}")
             return False
         else:
             self.counter += 1
@@ -217,9 +237,10 @@ def train_uuekan(
     patience: int = 10,
     checkpoint_path: str = "weights/uuekan_best.pth",
     device_str: str = "cuda",
+    resume: bool = True,
 ) -> Dict[str, List[float]]:
     """
-    Main training routine for UUEKAN.
+    Main training routine for UUEKAN with full state checkpointing and resuming.
     """
     device = torch.device(device_str if torch.cuda.is_available() else "cpu")
     print(f"Training UUEKAN on: {device}")
@@ -234,6 +255,7 @@ def train_uuekan(
     scaler = get_scaler(device)
     early_stopping = EarlyStopping(patience=patience, checkpoint_path=checkpoint_path)
 
+    start_epoch = 1
     history = {
         "train_loss": [], "val_loss": [],
         "train_dice": [], "val_dice": [],
@@ -241,10 +263,41 @@ def train_uuekan(
         "lr": [],
     }
 
-    print(f"\nStarting UUEKAN Training ({epochs} epochs, patience={patience}, grad_accum={grad_accum_steps})")
+    # Auto-resume from checkpoint if requested and available
+    if resume and os.path.exists(checkpoint_path):
+        try:
+            ckpt = torch.load(checkpoint_path, map_location=device)
+            if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
+                model.load_state_dict(ckpt["model_state_dict"])
+                if ckpt.get("optimizer_state_dict") is not None:
+                    optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+                if ckpt.get("scheduler_state_dict") is not None:
+                    scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+
+                saved_epoch = ckpt.get("epoch", 0)
+                start_epoch = saved_epoch + 1
+                early_stopping.best_dice = ckpt.get("best_dice", -float("inf"))
+                early_stopping.best_epoch = saved_epoch
+                if "history" in ckpt and isinstance(ckpt["history"], dict):
+                    history = ckpt["history"]
+
+                print(f"[Resume] Checkpoint loaded from {checkpoint_path}")
+                print(f"  Previous Best Epoch : {saved_epoch:02d} | Best Val Dice: {early_stopping.best_dice:.4f}")
+                print(f"  Resuming from Epoch  : {start_epoch:02d} to {epochs:02d} ({max(0, epochs - start_epoch + 1)} remaining)")
+            else:
+                model.load_state_dict(ckpt)
+                print(f"[Resume] Loaded raw weights from {checkpoint_path}. Starting from Epoch 1.")
+        except Exception as e:
+            print(f"[Resume Warning] Could not resume from checkpoint ({e}). Starting fresh from Epoch 1.")
+
+    if start_epoch > epochs:
+        print(f"\n[Notice] Model has already completed all {epochs} epochs! Returning best model.")
+        return history
+
+    print(f"\nStarting UUEKAN Training (Epochs {start_epoch:02d} to {epochs:02d}, patience={patience}, grad_accum={grad_accum_steps})")
     print("=" * 75)
 
-    for epoch in range(1, epochs + 1):
+    for epoch in range(start_epoch, epochs + 1):
         t0 = time.time()
         cur_lr = optimizer.param_groups[0]["lr"]
         print(f"\n>>> Epoch {epoch:02d}/{epochs:02d} (LR: {cur_lr:.2e})", flush=True)
@@ -274,13 +327,15 @@ def train_uuekan(
             f"Val Loss: {val_loss:.4f} (Dice: {val_dice:.4f}, IoU: {val_iou:.4f})"
         )
 
-        if early_stopping.step(val_dice, model):
+        if early_stopping.step(val_dice, model, epoch, optimizer, scheduler, history):
             print(f"\n[Early Stopping] No improvement in validation Dice for {patience} epochs. Stopping.")
             break
 
     # Restore best weights
     if os.path.exists(checkpoint_path):
+        ckpt = torch.load(checkpoint_path, map_location=device)
+        best_state = ckpt["model_state_dict"] if (isinstance(ckpt, dict) and "model_state_dict" in ckpt) else ckpt
         print(f"\nRestoring best model weights from {checkpoint_path}...")
-        model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+        model.load_state_dict(best_state)
 
     return history
