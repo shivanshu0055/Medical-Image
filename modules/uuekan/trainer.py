@@ -148,6 +148,14 @@ def train_one_epoch(
         for k, v in loss_dict.items():
             sub_losses[k] = sub_losses.get(k, 0.0) + v
 
+        # Print progress every 20 batches with flush
+        if (batch_idx + 1) % 20 == 0 or (batch_idx + 1) == len(train_loader):
+            print(
+                f"  Batch [{batch_idx+1:3d}/{len(train_loader)}] | "
+                f"Loss: {loss.item():.4f} | Dice: {m['dice']:.4f} | IoU: {m['iou']:.4f}",
+                flush=True
+            )
+
     num_batches = len(train_loader)
     avg_loss = total_loss / num_batches
     avg_dice = total_dice / num_batches
@@ -239,6 +247,7 @@ def train_uuekan(
     for epoch in range(1, epochs + 1):
         t0 = time.time()
         cur_lr = optimizer.param_groups[0]["lr"]
+        print(f"\n>>> Epoch {epoch:02d}/{epochs:02d} (LR: {cur_lr:.2e})", flush=True)
 
         train_loss, train_dice, train_iou, train_subs = train_one_epoch(
             model, train_loader, optimizer, criterion, scaler, device, grad_accum_steps=grad_accum_steps
