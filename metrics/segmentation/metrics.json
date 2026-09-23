@@ -1,0 +1,24 @@
+{
+  "model_architecture": "U-Net",
+  "parameters": 7849601,
+  "checkpoint_size_mb": 30.0,
+  "input_resolution": [
+    256,
+    256,
+    3
+  ],
+  "output_resolution": [
+    256,
+    256,
+    1
+  ],
+  "test_samples": 860,
+  "metrics": {
+    "test_loss_dice_bce": 0.0758,
+    "test_dice_score": 0.8701,
+    "test_dice_percentage": 87.01,
+    "test_iou_score": 0.8021,
+    "test_iou_percentage": 80.21,
+    "benchmark_rating": "Excellent (>0.85)"
+  }
+}

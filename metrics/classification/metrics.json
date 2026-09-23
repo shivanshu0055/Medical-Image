@@ -1,0 +1,49 @@
+{
+  "model_architecture": "EfficientNet-B0",
+  "parameters": 4012672,
+  "checkpoint_size_mb": 15.59,
+  "input_resolution": [
+    224,
+    224,
+    3
+  ],
+  "test_samples": 1000,
+  "classes": [
+    "glioma",
+    "meningioma",
+    "no_tumor",
+    "pituitary"
+  ],
+  "metrics": {
+    "test_accuracy": 0.984,
+    "test_accuracy_percentage": 98.4,
+    "test_macro_f1": 0.9847,
+    "test_loss": 0.0661
+  },
+  "confusion_matrix": [
+    [
+      246,
+      7,
+      0,
+      1
+    ],
+    [
+      1,
+      299,
+      3,
+      3
+    ],
+    [
+      0,
+      0,
+      140,
+      0
+    ],
+    [
+      0,
+      1,
+      0,
+      299
+    ]
+  ]
+}

@@ -38,7 +38,10 @@ Thumbs.db
 
 # ─── Kaggle ───────────────────────────────────────────────
 *.json
-!rag/knowledge_base/*.json    # Keep knowledge base JSONs
+!rag/knowledge_base/*.json
+!metrics/
+!metrics/*.json
+!metrics/*/*.json
 
 # ─── Logs ─────────────────────────────────────────────────
 *.log
