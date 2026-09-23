@@ -19,10 +19,23 @@ from typing import Dict, Tuple, List, Any
 
 import torch
 import torch.nn as nn
-from torch.cuda.amp import GradScaler, autocast
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
+
+# Use torch.amp modern API (PyTorch 2.0+) to avoid deprecation warnings
+if hasattr(torch, "amp") and hasattr(torch.amp, "autocast"):
+    from torch.amp import GradScaler, autocast
+    def get_autocast(device: torch.device):
+        return autocast(device_type=device.type, enabled=(device.type == "cuda"))
+    def get_scaler(device: torch.device):
+        return GradScaler(device.type, enabled=(device.type == "cuda"))
+else:
+    from torch.cuda.amp import GradScaler, autocast
+    def get_autocast(device: torch.device):
+        return autocast(enabled=(device.type == "cuda"))
+    def get_scaler(device: torch.device):
+        return GradScaler(enabled=(device.type == "cuda"))
 
 from .losses import CombinedUUEKANLoss
 
@@ -109,7 +122,7 @@ def train_one_epoch(
         images = images.to(device, non_blocking=True)
         masks = masks.to(device, non_blocking=True)
 
-        with autocast(enabled=torch.cuda.is_available()):
+        with get_autocast(device):
             # Forward pass with auxiliary heads enabled
             outputs = model(images, auxiliary=True)
             loss, loss_dict = criterion(outputs, masks)
@@ -162,7 +175,7 @@ def validate_one_epoch(
             images = images.to(device, non_blocking=True)
             masks = masks.to(device, non_blocking=True)
 
-            with autocast(enabled=torch.cuda.is_available()):
+            with get_autocast(device):
                 outputs = model(images, auxiliary=True)
                 loss, loss_dict = criterion(outputs, masks)
 
@@ -210,7 +223,7 @@ def train_uuekan(
     optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=min_lr)
     criterion = CombinedUUEKANLoss()
-    scaler = GradScaler(enabled=torch.cuda.is_available())
+    scaler = get_scaler(device)
     early_stopping = EarlyStopping(patience=patience, checkpoint_path=checkpoint_path)
 
     history = {

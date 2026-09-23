@@ -54,12 +54,17 @@ class BoundaryLoss(nn.Module):
     def forward(self, pred_logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         pred_prob = torch.sigmoid(pred_logits)
 
-        pred_bx = F.conv2d(pred_prob, self.sobel_x, padding=1)
-        pred_by = F.conv2d(pred_prob, self.sobel_y, padding=1)
+        # Ensure Sobel weights match input dtype and device under mixed precision
+        sobel_x = self.sobel_x.to(device=pred_prob.device, dtype=pred_prob.dtype)
+        sobel_y = self.sobel_y.to(device=pred_prob.device, dtype=pred_prob.dtype)
+
+        pred_bx = F.conv2d(pred_prob, sobel_x, padding=1)
+        pred_by = F.conv2d(pred_prob, sobel_y, padding=1)
         pred_boundary = torch.sqrt(pred_bx ** 2 + pred_by ** 2 + 1e-6)
 
-        target_bx = F.conv2d(target, self.sobel_x, padding=1)
-        target_by = F.conv2d(target, self.sobel_y, padding=1)
+        target_f = target.to(device=pred_prob.device, dtype=pred_prob.dtype)
+        target_bx = F.conv2d(target_f, sobel_x, padding=1)
+        target_by = F.conv2d(target_f, sobel_y, padding=1)
         target_boundary = torch.sqrt(target_bx ** 2 + target_by ** 2 + 1e-6)
 
         return F.mse_loss(pred_boundary, target_boundary)
@@ -88,20 +93,24 @@ class UncertaintyRegularizationLoss(nn.Module):
         uncertainty_map: torch.Tensor,
     ) -> torch.Tensor:
         pred_prob = torch.sigmoid(pred_logits)
-        error = torch.abs(pred_prob - target)
+        target_f = target.to(device=pred_prob.device, dtype=pred_prob.dtype)
+        error = torch.abs(pred_prob - target_f)
 
-        target_bx = F.conv2d(target, self.sobel_x, padding=1)
-        target_by = F.conv2d(target, self.sobel_y, padding=1)
+        sobel_x = self.sobel_x.to(device=pred_prob.device, dtype=pred_prob.dtype)
+        sobel_y = self.sobel_y.to(device=pred_prob.device, dtype=pred_prob.dtype)
+
+        target_bx = F.conv2d(target_f, sobel_x, padding=1)
+        target_by = F.conv2d(target_f, sobel_y, padding=1)
         boundary_grad = torch.sqrt(target_bx ** 2 + target_by ** 2 + 1e-6)
-        boundary_mask = (boundary_grad > 0.1).float()
+        boundary_mask = (boundary_grad > 0.1).to(dtype=pred_prob.dtype)
         non_boundary_mask = 1.0 - boundary_mask
 
         # Correct region: low uncertainty
-        correct_mask = (error < 0.2).float() * non_boundary_mask
+        correct_mask = (error < 0.2).to(dtype=pred_prob.dtype) * non_boundary_mask
         loss_correct = (uncertainty_map * correct_mask).mean()
 
         # Incorrect region: high uncertainty
-        incorrect_mask = (error >= 0.2).float() * non_boundary_mask
+        incorrect_mask = (error >= 0.2).to(dtype=pred_prob.dtype) * non_boundary_mask
         loss_incorrect = ((1.0 - uncertainty_map) * incorrect_mask * error).mean()
 
         # Boundary region: moderate uncertainty target (0.6)

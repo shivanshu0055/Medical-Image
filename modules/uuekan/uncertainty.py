@@ -78,7 +78,8 @@ class UncertaintyMapGenerator(nn.Module):
         # Gaussian smoothing
         pad = self.ksize // 2
         padded_u = F.pad(uncertainty, (pad, pad, pad, pad), mode="reflect")
-        smoothed = F.conv2d(padded_u, self.kernel, groups=self.channels)
+        kernel = self.kernel.to(device=padded_u.device, dtype=padded_u.dtype)
+        smoothed = F.conv2d(padded_u, kernel, groups=self.channels)
 
         # Percentile/min-max normalization to [0, 1]
         b = smoothed.shape[0]
