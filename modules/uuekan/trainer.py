@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import os
 import time
+import json
 from pathlib import Path
 from typing import Dict, Tuple, List, Any
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.optim import Adam
@@ -339,3 +341,138 @@ def train_uuekan(
         model.load_state_dict(best_state)
 
     return history
+
+
+def evaluate_test_set(
+    model: nn.Module,
+    test_loader: DataLoader,
+    criterion: CombinedUUEKANLoss | None = None,
+    device: torch.device | None = None,
+    threshold: float = 0.5,
+    save_json_path: str | Path | None = None,
+    base_dice: float = 0.8701,
+    base_iou: float = 0.8021,
+) -> Dict[str, Any]:
+    """
+    Evaluates UUEKAN across the entire test dataset.
+    Accumulates per-sample and dataset-level metrics (Dice, IoU, Precision, Recall, Loss),
+    prints a benchmark comparison against the base U-Net baseline, and optionally saves metrics to JSON.
+    """
+    if device is None:
+        device = next(model.parameters()).device
+
+    if criterion is None:
+        criterion = CombinedUUEKANLoss()
+
+    model.eval()
+    total_loss = 0.0
+    sub_losses: Dict[str, float] = {}
+
+    all_dices: List[float] = []
+    all_ious: List[float] = []
+    all_precisions: List[float] = []
+    all_recalls: List[float] = []
+    total_samples = 0
+
+    print("\n" + "=" * 75)
+    print(f"Evaluating UUEKAN on Full Test Dataset ({len(test_loader.dataset)} samples)...")
+    print("=" * 75)
+
+    with torch.no_grad():
+        for batch_idx, (images, masks, _) in enumerate(test_loader):
+            images = images.to(device, non_blocking=True)
+            masks = masks.to(device, non_blocking=True)
+            batch_size = images.size(0)
+            total_samples += batch_size
+
+            with get_autocast(device):
+                outputs = model(images, auxiliary=True)
+                loss, loss_dict = criterion(outputs, masks)
+
+            main_pred = outputs[0] if isinstance(outputs, (tuple, list)) else outputs
+            total_loss += loss.item() * batch_size
+
+            for k, v in loss_dict.items():
+                sub_losses[k] = sub_losses.get(k, 0.0) + v * batch_size
+
+            pred_prob = torch.sigmoid(main_pred)
+            pred_bin = (pred_prob > threshold).float()
+
+            # Compute sample-wise metrics
+            for i in range(batch_size):
+                p = pred_bin[i].view(-1)
+                t = masks[i].view(-1)
+
+                intersection = (p * t).sum().item()
+                union = (p + t).clamp(0, 1).sum().item()
+                p_sum = p.sum().item()
+                t_sum = t.sum().item()
+
+                dice = (2.0 * intersection + 1e-6) / (p_sum + t_sum + 1e-6)
+                iou = (intersection + 1e-6) / (union + 1e-6)
+                prec = (intersection + 1e-6) / (p_sum + 1e-6)
+                rec = (intersection + 1e-6) / (t_sum + 1e-6)
+
+                all_dices.append(float(dice))
+                all_ious.append(float(iou))
+                all_precisions.append(float(prec))
+                all_recalls.append(float(rec))
+
+    mean_dice = float(np.mean(all_dices))
+    std_dice = float(np.std(all_dices))
+    mean_iou = float(np.mean(all_ious))
+    std_iou = float(np.std(all_ious))
+    mean_prec = float(np.mean(all_precisions))
+    mean_rec = float(np.mean(all_recalls))
+    mean_loss = float(total_loss / max(total_samples, 1))
+
+    dice_gain = (mean_dice - base_dice) * 100.0
+    iou_gain = (mean_iou - base_iou) * 100.0
+
+    print(f"\n[Test Evaluation Results]")
+    print(f"  Total Test Samples   : {total_samples}")
+    print(f"  Test Loss            : {mean_loss:.4f}")
+    print(f"  Test Dice (F1)       : {mean_dice:.4f} \u00b1 {std_dice:.4f} ({mean_dice*100:.2f}%)")
+    print(f"  Test IoU             : {mean_iou:.4f} \u00b1 {std_iou:.4f} ({mean_iou*100:.2f}%)")
+    print(f"  Test Precision       : {mean_prec:.4f} ({mean_prec*100:.2f}%)")
+    print(f"  Test Recall          : {mean_rec:.4f} ({mean_rec*100:.2f}%)")
+    print("\n[Benchmark Comparison with Base U-Net]")
+    print(f"  Base U-Net Dice      : {base_dice*100:.2f}%")
+    print(f"  UUEKAN Test Dice     : {mean_dice*100:.2f}% -> Gain: {dice_gain:+.2f}%")
+    print(f"  Base U-Net IoU       : {base_iou*100:.2f}%")
+    print(f"  UUEKAN Test IoU      : {mean_iou*100:.2f}% -> Gain: {iou_gain:+.2f}%")
+    print("=" * 75)
+
+    results = {
+        "model_architecture": "UUEKAN",
+        "parameters": sum(p.numel() for p in model.parameters()),
+        "test_samples": total_samples,
+        "input_resolution": [512, 512, 3],
+        "output_resolution": [512, 512, 1],
+        "metrics": {
+            "test_loss_total": round(mean_loss, 4),
+            "test_dice_score": round(mean_dice, 4),
+            "test_dice_std": round(std_dice, 4),
+            "test_dice_percentage": round(mean_dice * 100.0, 2),
+            "test_iou_score": round(mean_iou, 4),
+            "test_iou_std": round(std_iou, 4),
+            "test_iou_percentage": round(mean_iou * 100.0, 2),
+            "test_precision": round(mean_prec, 4),
+            "test_recall": round(mean_rec, 4),
+            "base_unet_dice": round(base_dice, 4),
+            "gain_over_unet_dice_pct": round(dice_gain, 2),
+            "base_unet_iou": round(base_iou, 4),
+            "gain_over_unet_iou_pct": round(iou_gain, 2),
+            "benchmark_rating": "Superior" if mean_dice > base_dice else "Comparable",
+        },
+    }
+
+    if save_json_path is not None:
+        save_path = Path(save_json_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(save_path, "w") as f:
+            json.dump(results, f, indent=2)
+        print(f"Test metrics successfully saved to: {save_path}")
+
+    return results
+
