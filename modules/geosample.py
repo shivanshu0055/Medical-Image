@@ -61,9 +61,9 @@ import math
 R_MIN     = 0.5
 R_MAX     = 3.0
 EPS       = 1e-6
-REDUCTION = 4
+REDUCTION = 2
 MIN_INNER = 8
-MAX_INNER = 64
+MAX_INNER = 128
 
 
 def _compute_inner_dim(channels: int) -> int:
