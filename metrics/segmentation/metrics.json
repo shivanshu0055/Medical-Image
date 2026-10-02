@@ -14,11 +14,11 @@
   ],
   "test_samples": 860,
   "metrics": {
-    "test_loss_dice_bce": 0.0758,
-    "test_dice_score": 0.8701,
-    "test_dice_percentage": 87.01,
-    "test_iou_score": 0.8021,
-    "test_iou_percentage": 80.21,
+    "test_loss_dice_bce": 0.0755,
+    "test_dice_score": 0.8706,
+    "test_dice_percentage": 87.06,
+    "test_iou_score": 0.8026,
+    "test_iou_percentage": 80.26,
     "benchmark_rating": "Excellent (>0.85)"
   }
 }

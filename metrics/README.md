@@ -24,9 +24,9 @@ metrics/
 
 ## 🏆 Current Model Performance Summary
 
-| Agent | Architecture | Primary Metric | Score | Rating |
-|---|---|---|---|---|
-| **Segmentation Agent** | U-Net (7.85M params) | Test Dice (DSC) | **0.8706** (87.06%) | **Excellent (>0.85)** |
-| **Segmentation Agent** | U-Net (7.85M params) | Test IoU (Jaccard) | **0.7709** (77.09%) | High Spatial Overlap |
-| **Classification Agent**| EfficientNet-B0 (4.01M params) | Test Accuracy | **98.20%** | State of the Art |
-| **Classification Agent**| EfficientNet-B0 (4.01M params) | Test Macro-F1 | **0.9810** | Balanced across classes |
+| Agent                         | Architecture                   | Primary Metric         | Score               | Rating                      |
+| ----------------------------- | ------------------------------ | ---------------------- | ------------------- | --------------------------- |
+| **Segmentation Agent**        | U-Net (7.85M params)           | Test Dice (DSC)        | **0.8706** (87.06%) | **Excellent (>0.85)**       |
+| **Segmentation Agent**        | U-Net (7.85M params)           | Test IoU (Jaccard)     | **0.8026** (80.26%) | High Spatial Overlap        |
+| **Classification Agent**      | EfficientNet-B0 (4.01M params) | Test Accuracy          | **98.40%**          | State of the Art            |
+| **Classification Agent**      | EfficientNet-B0 (4.01M params) | Test Macro-F1          | **0.9847**          | Balanced across classes     |

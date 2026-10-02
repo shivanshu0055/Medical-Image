@@ -19,7 +19,7 @@ def main():
 
     # ── Build both models ────────────────────────────────────────────────
     std_unet = UNet(in_channels=3, out_channels=1, base_features=32).to(device)
-    geo_unet = GeoSampleUNet(in_channels=3, out_channels=1, base_features=32).to(device)
+    geo_unet = GeoSampleUNet(in_channels=3, out_channels=1, base_features=48).to(device)
 
     # ── Parameter comparison ─────────────────────────────────────────────
     std_params = count_params_std(std_unet)

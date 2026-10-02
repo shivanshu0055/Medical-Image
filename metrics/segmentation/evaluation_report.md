@@ -11,9 +11,9 @@
 
 | Metric | Score | Clinical Standard | Rating |
 |---|---|---|---|
-| **Dice Similarity Coefficient (DSC)** | **0.8701** (87.01%) | > 0.85 | **Excellent (>0.85)** |
-| **Intersection over Union (IoU)** | **0.8021** (80.21%) | > 0.75 | **High Spatial Overlap** |
-| **Combined Loss (Dice + BCE)** | **0.0758** | < 0.15 | **Excellent Convergence** |
+| **Dice Similarity Coefficient (DSC)** | **0.8706** (87.06%) | > 0.85 | **Excellent (>0.85)** |
+| **Intersection over Union (IoU)** | **0.8026** (80.26%) | > 0.75 | **High Spatial Overlap** |
+| **Combined Loss (Dice + BCE)** | **0.0755** | < 0.15 | **Excellent Convergence** |
 
 ---
 

@@ -21,7 +21,7 @@ import torch
 import torch.nn as nn
 from torch.cuda.amp import GradScaler, autocast
 from torch.optim import Adam
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
 from torch.utils.data import DataLoader
 
 
@@ -301,8 +301,9 @@ def train_segmentation(
     train_loader:   DataLoader,
     val_loader:     DataLoader,
     epochs:         int   = 40,
-    learning_rate:  float = 1e-4,
-    patience:       int   = 7,
+    learning_rate:  float = 2e-4,
+    patience:       int   = 10,
+    lr_scheduler_type: str = "cosine",
     checkpoint_path: str  = "models/segmentation/unet_best.pth",
     device_str:     str   = "cuda",
 ) -> dict:
@@ -310,14 +311,15 @@ def train_segmentation(
     Full training loop for the U-Net segmentation model.
 
     Args:
-        model:           UNet model (from modules/unet.py).
-        train_loader:    Training DataLoader.
-        val_loader:      Validation DataLoader.
-        epochs:          Maximum number of training epochs.
-        learning_rate:   Adam optimizer learning rate.
-        patience:        Early stopping patience.
-        checkpoint_path: Where to save the best model.
-        device_str:      'cuda' or 'cpu'.
+        model:              UNet model (from modules/unet.py or geosample_unet.py).
+        train_loader:       Training DataLoader.
+        val_loader:         Validation DataLoader.
+        epochs:             Maximum number of training epochs.
+        learning_rate:      Adam optimizer learning rate.
+        patience:           Early stopping patience.
+        lr_scheduler_type:  'cosine' (CosineAnnealingLR) or 'plateau' (ReduceLROnPlateau).
+        checkpoint_path:    Where to save the best model.
+        device_str:         'cuda' or 'cpu'.
 
     Returns:
         Dictionary with training history:
@@ -338,9 +340,13 @@ def train_segmentation(
     optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)
 
     # ── Learning Rate Scheduler ───────────────────────────────────────────────
-    # If val loss doesn't improve for 3 epochs, reduce LR by factor of 0.5.
-    # This helps the model fine-tune in the later stages of training.
-    scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=3)
+    if lr_scheduler_type.lower() == "cosine":
+        # Cosine Annealing smoothly decays LR down to 1e-6 over the course of training,
+        # letting deformable sampling kernels settle in later epochs.
+        scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
+    else:
+        # Reduce LR by factor of 0.5 if val loss doesn't improve for 3 epochs.
+        scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=3)
 
     # ── Loss Function ─────────────────────────────────────────────────────────
     criterion = DiceBCELoss()
@@ -355,14 +361,15 @@ def train_segmentation(
     # ── Training History ──────────────────────────────────────────────────────
     history = {"train_loss": [], "val_loss": [], "train_dice": [], "val_dice": []}
 
-    print(f"\nStarting training: {epochs} max epochs, patience={patience}")
+    print(f"\nStarting training: {epochs} max epochs, patience={patience}, scheduler={lr_scheduler_type}")
     print("=" * 65)
 
     for epoch in range(1, epochs + 1):
         epoch_start = time.time()
+        current_lr = optimizer.param_groups[0]["lr"]
 
         # ── Train ────────────────────────────────────────────────────────
-        print(f"\nEpoch {epoch:02d}/{epochs}")
+        print(f"\nEpoch {epoch:02d}/{epochs}  [lr: {current_lr:.2e}]")
         train_loss, train_dice = train_one_epoch(
             model, train_loader, optimizer, criterion, scaler, device
         )
@@ -382,7 +389,10 @@ def train_segmentation(
         history["val_dice"].append(val_dice)
 
         # ── Update scheduler ──────────────────────────────────────────────
-        scheduler.step(val_loss)
+        if lr_scheduler_type.lower() == "cosine":
+            scheduler.step()
+        else:
+            scheduler.step(val_loss)
 
         # ── Early stopping check ──────────────────────────────────────────
         stop = early_stopping.step(val_loss, model)

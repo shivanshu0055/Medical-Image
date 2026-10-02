@@ -1,0 +1,40 @@
+{
+  "model": "GeoSampleUNet",
+  "architecture": "GeoSample U-Net (Geometry-Guided Sampling with Consensus Skip Alignment)",
+  "dataset": "BRISC 2025 (Kaggle)",
+  "checkpoint": "models/segmentation/geosample_unet_brisc.pth",
+  "file_size_bytes": 10183231,
+  "file_size_mb": 10.18,
+  "parameters": 2501545,
+  "parameter_reduction_vs_baseline": "67.8%",
+  "input_resolution": [
+    256,
+    256,
+    3
+  ],
+  "output_resolution": [
+    256,
+    256,
+    1
+  ],
+  "test_samples": 860,
+  "training": {
+    "epochs_completed": 40,
+    "best_val_epoch": 37,
+    "best_val_loss": 0.0834,
+    "best_val_dice": 0.8550,
+    "final_train_loss": 0.0661,
+    "final_train_dice": 0.8871
+  },
+  "metrics": {
+    "test_loss_dice_bce": 0.0868,
+    "test_dice_score": 0.8537,
+    "test_dice_percentage": 85.37,
+    "test_median_dice": 0.9268,
+    "test_median_dice_percentage": 92.68,
+    "test_iou_score": 0.7778,
+    "test_iou_percentage": 77.78,
+    "dice_std": 0.1831,
+    "benchmark_rating": "Excellent (>0.85)"
+  }
+}
