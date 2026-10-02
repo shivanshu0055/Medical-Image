@@ -166,32 +166,42 @@ class GeoSampleUNet(nn.Module):
         in_channels: int = 3,
         out_channels: int = 1,
         base_features: int = 32,
+        deep_supervision: bool = True,
     ):
         super().__init__()
+        self.deep_supervision = deep_supervision
 
-        f = base_features  # shorthand: f=32 → 32, 64, 128, 256, 512
+        f = base_features  # shorthand: f=60 → 60, 120, 240, 480, 960
 
         # ── Encoder (going down) ──────────────────────────────────────────
-        self.enc1 = GeoEncoderBlock(in_channels, f)       # 3   → 32
-        self.enc2 = GeoEncoderBlock(f,           f * 2)   # 32  → 64
-        self.enc3 = GeoEncoderBlock(f * 2,       f * 4)   # 64  → 128
-        self.enc4 = GeoEncoderBlock(f * 4,       f * 8)   # 128 → 256
+        self.enc1 = GeoEncoderBlock(in_channels, f)       # 3   → f
+        self.enc2 = GeoEncoderBlock(f,           f * 2)   # f   → f*2
+        self.enc3 = GeoEncoderBlock(f * 2,       f * 4)   # f*2 → f*4
+        self.enc4 = GeoEncoderBlock(f * 4,       f * 8)   # f*4 → f*8
 
         # ── Bottleneck (bottom of the U) ──────────────────────────────────
         # GeoSample2D for oriented refinement at the most compressed scale.
-        self.bottleneck = GeoSample2D(f * 8, f * 16)     # 256 → 512
+        self.bottleneck = GeoSample2D(f * 8, f * 16)     # f*8 → f*16
 
         # ── Decoder (going up) ────────────────────────────────────────────
         # Each stage: upsample → consensus align → geo refine
-        self.dec4 = GeoDecoderBlock(f * 16, f * 8, f * 8)  # 512 + 256 → 256
-        self.dec3 = GeoDecoderBlock(f * 8,  f * 4, f * 4)  # 256 + 128 → 128
-        self.dec2 = GeoDecoderBlock(f * 4,  f * 2, f * 2)  # 128 + 64  → 64
-        self.dec1 = GeoDecoderBlock(f * 2,  f,     f)       # 64  + 32  → 32
+        self.dec4 = GeoDecoderBlock(f * 16, f * 8, f * 8)  # f*16 + f*8 → f*8
+        self.dec3 = GeoDecoderBlock(f * 8,  f * 4, f * 4)  # f*8  + f*4 → f*4
+        self.dec2 = GeoDecoderBlock(f * 4,  f * 2, f * 2)  # f*4  + f*2 → f*2
+        self.dec1 = GeoDecoderBlock(f * 2,  f,     f)       # f*2  + f   → f
 
         # ── Output Layer ──────────────────────────────────────────────────
         # 1×1 conv to map features to logits (same as standard U-Net).
         # No sigmoid — applied separately for BCEWithLogitsLoss compatibility.
         self.output_conv = nn.Conv2d(f, out_channels, kernel_size=1)
+
+        # ── Deep Supervision Auxiliary Heads ──────────────────────────────
+        if self.deep_supervision:
+            self.aux2 = nn.Conv2d(f * 2, out_channels, kernel_size=1)  # 128x128
+            self.aux3 = nn.Conv2d(f * 4, out_channels, kernel_size=1)  # 64x64
+        else:
+            self.aux2 = None
+            self.aux3 = None
 
     def forward(self, x):
         """
@@ -201,26 +211,35 @@ class GeoSampleUNet(nn.Module):
             x: Input tensor (batch, 3, 256, 256).
 
         Returns:
-            Logits tensor (batch, 1, 256, 256).
-            Apply sigmoid + threshold 0.5 for binary mask.
+            In training mode with deep_supervision=True:
+                tuple of (logits, aux2, aux3)
+            In eval mode (or deep_supervision=False):
+                logits tensor (batch, 1, 256, 256)
         """
         # ── Encoder ──
-        skip1, x = self.enc1(x)   # skip1: (B, 32,  256, 256) | x: (B, 32,  128, 128)
-        skip2, x = self.enc2(x)   # skip2: (B, 64,  128, 128) | x: (B, 64,   64,  64)
-        skip3, x = self.enc3(x)   # skip3: (B, 128,  64,  64) | x: (B, 128,  32,  32)
-        skip4, x = self.enc4(x)   # skip4: (B, 256,  32,  32) | x: (B, 256,  16,  16)
+        skip1, x = self.enc1(x)   # skip1: (B, f,   256, 256) | x: (B, f,   128, 128)
+        skip2, x = self.enc2(x)   # skip2: (B, f*2, 128, 128) | x: (B, f*2,  64,  64)
+        skip3, x = self.enc3(x)   # skip3: (B, f*4,  64,  64) | x: (B, f*4,  32,  32)
+        skip4, x = self.enc4(x)   # skip4: (B, f*8,  32,  32) | x: (B, f*8,  16,  16)
 
         # ── Bottleneck ──
-        x = self.bottleneck(x)    # x: (B, 512, 16, 16)
+        x = self.bottleneck(x)    # x: (B, f*16, 16, 16)
 
         # ── Decoder (with geometry-aligned skip connections) ──
-        x = self.dec4(x, skip4)   # x: (B, 256, 32,  32)
-        x = self.dec3(x, skip3)   # x: (B, 128, 64,  64)
-        x = self.dec2(x, skip2)   # x: (B, 64,  128, 128)
-        x = self.dec1(x, skip1)   # x: (B, 32,  256, 256)
+        x_dec4 = self.dec4(x, skip4)        # (B, f*8, 32,  32)
+        x_dec3 = self.dec3(x_dec4, skip3)   # (B, f*4, 64,  64)
+        x_dec2 = self.dec2(x_dec3, skip2)   # (B, f*2, 128, 128)
+        x_dec1 = self.dec1(x_dec2, skip1)   # (B, f,   256, 256)
 
         # ── Output ──
-        return self.output_conv(x)  # (B, 1, 256, 256) — raw logits
+        logits = self.output_conv(x_dec1)   # (B, 1, 256, 256)
+
+        if self.training and self.deep_supervision and self.aux2 is not None:
+            aux2 = self.aux2(x_dec2)        # (B, 1, 128, 128)
+            aux3 = self.aux3(x_dec3)        # (B, 1, 64, 64)
+            return logits, aux2, aux3
+
+        return logits
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -242,12 +261,13 @@ def build_geosample_unet(config: dict | None = None) -> GeoSampleUNet:
         GeoSampleUNet model (not yet trained, weights are random).
     """
     if config is None:
-        return GeoSampleUNet(in_channels=3, out_channels=1, base_features=32)
+        return GeoSampleUNet(in_channels=3, out_channels=1, base_features=32, deep_supervision=True)
 
     return GeoSampleUNet(
         in_channels=config.get("in_channels", 3),
         out_channels=config.get("out_channels", 1),
         base_features=config.get("base_features", 32),
+        deep_supervision=config.get("deep_supervision", True),
     )
 
 

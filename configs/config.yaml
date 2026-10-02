@@ -76,15 +76,16 @@ segmentation:
   architecture: "unet"
   in_channels: 3
   out_channels: 1            # Binary mask
-  base_features: 48          # GeoSample U-Net feature map start size (48 → 96 → 192 → 384 → 768)
-  weights_path: "models/segmentation/geosample_unet_brisc_2.pth"
+  base_features: 60          # GeoSample U-Net feature map start size (60 → 120 → 240 → 480 → 960) (~7.56M params)
+  deep_supervision: true     # Multi-scale auxiliary heads at decoder levels 2 and 3
+  weights_path: "models/segmentation/geosample_unet_brisc_3.pth"
 
   # Training hyperparameters
   batch_size: 8
-  learning_rate: 0.0002
+  learning_rate: 0.00025
   epochs: 40
   lr_scheduler: "cosine"     # Cosine annealing for smooth convergence
-  loss: "dice_bce"           # Dice + Binary Cross-Entropy combined
+  loss: "dice_focal"         # Dice + Focal Binary Cross-Entropy combined
   early_stopping_patience: 10
 
   # Inference threshold

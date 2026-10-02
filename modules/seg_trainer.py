@@ -19,6 +19,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.cuda.amp import GradScaler, autocast
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
@@ -93,6 +94,40 @@ class DiceBCELoss(nn.Module):
         dice_loss = 1.0 - dice_score.mean()   # loss = 1 - score (we minimize loss)
 
         return 0.5 * bce_loss + 0.5 * dice_loss
+
+
+class DiceFocalLoss(nn.Module):
+    """
+    Combined Dice Loss + Focal Binary Cross-Entropy Loss.
+
+    Focal BCE automatically down-weights easy background pixels and focuses
+    gradients on ambiguous, infiltrative tumor margins.
+    """
+
+    def __init__(self, gamma: float = 2.0, alpha: float = 0.6, smooth: float = 1.0):
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.smooth = smooth
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        probs = torch.sigmoid(logits)
+        bce = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+
+        p_t = probs * targets + (1.0 - probs) * (1.0 - targets)
+        alpha_t = self.alpha * targets + (1.0 - self.alpha) * (1.0 - targets)
+        focal_weight = alpha_t * ((1.0 - p_t) ** self.gamma)
+        focal_loss = (focal_weight * bce).mean()
+
+        probs_flat = probs.view(probs.shape[0], -1)
+        targets_flat = targets.view(targets.shape[0], -1)
+        intersection = (probs_flat * targets_flat).sum(dim=1)
+        dice_score = (2.0 * intersection + self.smooth) / (
+            probs_flat.sum(dim=1) + targets_flat.sum(dim=1) + self.smooth
+        )
+        dice_loss = 1.0 - dice_score.mean()
+
+        return 0.5 * focal_loss + 0.5 * dice_loss
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -231,8 +266,18 @@ def train_one_epoch(
         # autocast automatically decides which ops to run in FP16 vs FP32
         # for best accuracy + speed. FP16 uses half the VRAM of FP32.
         with autocast():
-            logits = model(images)         # (B, 1, 256, 256)
-            loss   = criterion(logits, masks)
+            out = model(images)
+            if isinstance(out, tuple):
+                logits, aux2, aux3 = out
+                loss_main = criterion(logits, masks)
+                target2 = F.interpolate(masks, size=aux2.shape[-2:], mode="nearest")
+                target3 = F.interpolate(masks, size=aux3.shape[-2:], mode="nearest")
+                loss_aux2 = criterion(aux2, target2)
+                loss_aux3 = criterion(aux3, target3)
+                loss = loss_main + 0.3 * loss_aux2 + 0.2 * loss_aux3
+            else:
+                logits = out
+                loss   = criterion(logits, masks)
 
         # ── Backward pass (compute gradients) ─────────────────────────────
         # scaler handles FP16 gradient scaling to prevent underflow
@@ -282,7 +327,8 @@ def validate_one_epoch(
             masks  = masks.to(device,  non_blocking=True)
 
             with autocast():
-                logits = model(images)
+                out = model(images)
+                logits = out[0] if isinstance(out, tuple) else out
                 loss   = criterion(logits, masks)
 
             total_loss += loss.item()
@@ -301,9 +347,10 @@ def train_segmentation(
     train_loader:   DataLoader,
     val_loader:     DataLoader,
     epochs:         int   = 40,
-    learning_rate:  float = 2e-4,
+    learning_rate:  float = 2.5e-4,
     patience:       int   = 10,
     lr_scheduler_type: str = "cosine",
+    loss_type:      str   = "dice_focal",
     checkpoint_path: str  = "models/segmentation/unet_best.pth",
     device_str:     str   = "cuda",
 ) -> dict:
@@ -318,6 +365,7 @@ def train_segmentation(
         learning_rate:      Adam optimizer learning rate.
         patience:           Early stopping patience.
         lr_scheduler_type:  'cosine' (CosineAnnealingLR) or 'plateau' (ReduceLROnPlateau).
+        loss_type:          'dice_focal' (DiceFocalLoss) or 'dice_bce' (DiceBCELoss).
         checkpoint_path:    Where to save the best model.
         device_str:         'cuda' or 'cpu'.
 
@@ -349,7 +397,10 @@ def train_segmentation(
         scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=3)
 
     # ── Loss Function ─────────────────────────────────────────────────────────
-    criterion = DiceBCELoss()
+    if loss_type.lower() == "dice_focal":
+        criterion = DiceFocalLoss(gamma=2.0, alpha=0.6, smooth=1.0)
+    else:
+        criterion = DiceBCELoss()
 
     # ── Mixed Precision Scaler ────────────────────────────────────────────────
     # Required for FP16 training — manages gradient scaling
