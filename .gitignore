@@ -39,9 +39,6 @@ Thumbs.db
 # ─── Kaggle ───────────────────────────────────────────────
 *.json
 !rag/knowledge_base/*.json
-!metrics/
-!metrics/*.json
-!metrics/*/*.json
 
 # ─── Logs ─────────────────────────────────────────────────
 *.log
