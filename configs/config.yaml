@@ -77,7 +77,7 @@ segmentation:
   in_channels: 3
   out_channels: 1            # Binary mask
   base_features: 48          # GeoSample U-Net feature map start size (48 → 96 → 192 → 384 → 768)
-  weights_path: "models/segmentation/geosample_unet_brisc.pth"
+  weights_path: "models/segmentation/geosample_unet_brisc_2.pth"
 
   # Training hyperparameters
   batch_size: 8
