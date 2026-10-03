@@ -19,7 +19,7 @@ def main():
 
     # ── Build both models ────────────────────────────────────────────────
     std_unet = UNet(in_channels=3, out_channels=1, base_features=32).to(device)
-    geo_unet = GeoSampleUNet(in_channels=3, out_channels=1, base_features=60, deep_supervision=True).to(device)
+    geo_unet = GeoSampleUNet(in_channels=3, out_channels=1, base_features=48).to(device)
 
     # ── Parameter comparison ─────────────────────────────────────────────
     std_params = count_params_std(std_unet)
@@ -38,7 +38,6 @@ def main():
     print(f"\n[Forward Pass Test] (batch_size={batch_size})")
     print(f"  Input shape:  {tuple(dummy_input.shape)}")
 
-    geo_unet.eval()
     with torch.no_grad():
         std_out = std_unet(dummy_input)
         geo_out = geo_unet(dummy_input)
@@ -55,16 +54,11 @@ def main():
         torch.cuda.empty_cache()
 
     # ── Backward pass gradient test ──────────────────────────────────────
-    print("\n[Backward Pass Test (Training Mode with Deep Supervision)]")
+    print("\n[Backward Pass Test]")
     geo_unet.train()
     dummy_input2 = torch.randn(batch_size, 3, 256, 256, device=device)
-    out = geo_unet(dummy_input2)
-    if isinstance(out, tuple):
-        logits, aux2, aux3 = out
-        print(f"  Multi-scale outputs: logits={tuple(logits.shape)}, aux2={tuple(aux2.shape)}, aux3={tuple(aux3.shape)}")
-        loss = logits.mean() + 0.3 * aux2.mean() + 0.2 * aux3.mean()
-    else:
-        loss = out.mean()
+    output = geo_unet(dummy_input2)
+    loss = output.mean()
     loss.backward()
 
     # Check that all parameters received gradients
