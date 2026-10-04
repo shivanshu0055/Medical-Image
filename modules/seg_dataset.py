@@ -183,31 +183,199 @@ class SegmentationDataset(Dataset):
         """
         Apply random augmentation to BOTH image and mask simultaneously.
 
-        All spatial transforms (flip, rotate) are applied identically to both.
-        Color/brightness transforms are applied to the IMAGE ONLY —
-        the mask should not change color, it's a binary label.
+        Augmentation pipeline (applied in order):
+          1. Random horizontal flip  (p=0.5)
+          2. Random vertical flip    (p=0.5)
+          3. Random rotation         (±20 degrees)
+          4. Random scale + crop     (0.85x–1.15x, p=0.3)
+          5. Elastic deformation     (p=0.3) — the key addition
+          6. Brightness jitter       (image only, ±20%)
+          7. Contrast jitter         (image only, ±20%)
+          8. Random gamma            (image only, 0.8–1.2, p=0.3)
+          9. Gaussian noise          (image only, p=0.2)
+
+        All spatial transforms are applied identically to image and mask.
+        Intensity transforms are applied to the IMAGE ONLY.
         """
-        # ── Random horizontal flip (50% chance) ───────────────────────────
+        # ── 1. Random horizontal flip (50% chance) ────────────────────────
         if random.random() > 0.5:
             image = TF.hflip(image)
-            mask  = TF.hflip(mask)   # same flip on mask
+            mask  = TF.hflip(mask)
 
-        # ── Random rotation (±15 degrees) ─────────────────────────────────
-        # fill=0 means the empty border after rotation is black (background)
-        angle = random.uniform(-15, 15)
+        # ── 2. Random vertical flip (50% chance) ─────────────────────────
+        # Brain MRI slices have no strict up/down convention in 2D extracts,
+        # and this doubles our effective augmentation diversity.
+        if random.random() > 0.5:
+            image = TF.vflip(image)
+            mask  = TF.vflip(mask)
+
+        # ── 3. Random rotation (±20 degrees) ─────────────────────────────
+        angle = random.uniform(-20, 20)
         image = TF.rotate(image, angle, fill=0)
-        mask  = TF.rotate(mask,  angle, fill=0)   # same rotation on mask
+        mask  = TF.rotate(mask,  angle, fill=0)
 
-        # ── Random brightness and contrast (image only) ───────────────────
-        # MRI brightness can vary between scanners, so training with
-        # different brightness levels makes the model more robust.
-        brightness_factor = random.uniform(0.8, 1.2)   # ±20%
-        contrast_factor   = random.uniform(0.8, 1.2)   # ±20%
+        # ── 4. Random scale + crop (p=0.3) ───────────────────────────────
+        # Simulates varying zoom levels / slice positions.
+        # We scale up/down slightly, then center-crop back to original size.
+        if random.random() < 0.3:
+            w, h = image.size
+            scale_factor = random.uniform(0.85, 1.15)
+            new_w = int(w * scale_factor)
+            new_h = int(h * scale_factor)
+            image = TF.resize(image, [new_h, new_w],
+                              interpolation=transforms.InterpolationMode.BILINEAR,
+                              antialias=True)
+            mask  = TF.resize(mask,  [new_h, new_w],
+                              interpolation=transforms.InterpolationMode.NEAREST)
+            # Center-crop (or pad) back to original size
+            image = TF.center_crop(image, [h, w])
+            mask  = TF.center_crop(mask,  [h, w])
+
+        # ── 5. Elastic deformation (p=0.3) ───────────────────────────────
+        # This is the most impactful augmentation for medical segmentation.
+        # It simulates natural tissue deformation / anatomical variability.
+        # Implementation uses pure PyTorch — no external dependencies needed.
+        if random.random() < 0.3:
+            image, mask = self._elastic_deformation(image, mask,
+                                                     alpha=80.0, sigma=10.0)
+
+        # ── 6. Brightness jitter (image only, ±20%) ──────────────────────
+        brightness_factor = random.uniform(0.8, 1.2)
         image = TF.adjust_brightness(image, brightness_factor)
+
+        # ── 7. Contrast jitter (image only, ±20%) ────────────────────────
+        contrast_factor = random.uniform(0.8, 1.2)
         image = TF.adjust_contrast(image, contrast_factor)
-        # Note: mask is NOT modified by brightness/contrast — it's a binary label
+
+        # ── 8. Random gamma correction (image only, p=0.3) ───────────────
+        # Simulates non-linear intensity variations across different MRI
+        # scanners and acquisition protocols.
+        if random.random() < 0.3:
+            gamma = random.uniform(0.8, 1.2)
+            image = TF.adjust_gamma(image, gamma)
+
+        # ── 9. Gaussian noise (image only, p=0.2) ────────────────────────
+        # Adds robustness to noisy / low-quality scans.
+        if random.random() < 0.2:
+            image = self._add_gaussian_noise(image, std=0.02)
 
         return image, mask
+
+    @staticmethod
+    def _elastic_deformation(
+        image: Image.Image,
+        mask: Image.Image,
+        alpha: float = 80.0,
+        sigma: float = 10.0,
+    ) -> tuple[Image.Image, Image.Image]:
+        """
+        Apply elastic deformation to image and mask using the same
+        random displacement field (Simard et al., 2003).
+
+        Pure PyTorch implementation — no scipy/albumentations needed.
+
+        Args:
+            image: PIL Image (RGB).
+            mask:  PIL Image (grayscale).
+            alpha: Deformation intensity (higher = more distortion).
+            sigma: Gaussian smoothing kernel sigma (higher = smoother warps).
+
+        Returns:
+            Deformed (image, mask) as PIL Images.
+        """
+        import numpy as np
+
+        w, h = image.size
+
+        # Generate random displacement fields
+        rng = np.random.default_rng()
+        dx = rng.standard_normal((h, w)).astype(np.float32)
+        dy = rng.standard_normal((h, w)).astype(np.float32)
+
+        # Smooth with a Gaussian kernel (implemented via 1D separable convolution)
+        dx_t = torch.from_numpy(dx).unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
+        dy_t = torch.from_numpy(dy).unsqueeze(0).unsqueeze(0)
+
+        # Create 1D Gaussian kernel
+        ksize = int(6 * sigma + 1) | 1  # ensure odd
+        x_coord = torch.arange(ksize, dtype=torch.float32) - ksize // 2
+        gauss_1d = torch.exp(-0.5 * (x_coord / sigma) ** 2)
+        gauss_1d = gauss_1d / gauss_1d.sum()
+
+        # Separable Gaussian blur: convolve along H, then along W
+        kernel_h = gauss_1d.view(1, 1, -1, 1)  # (1, 1, K, 1)
+        kernel_w = gauss_1d.view(1, 1, 1, -1)  # (1, 1, 1, K)
+        pad_h = ksize // 2
+        pad_w = ksize // 2
+
+        dx_t = torch.nn.functional.pad(dx_t, [0, 0, pad_h, pad_h], mode='reflect')
+        dx_t = torch.nn.functional.conv2d(dx_t, kernel_h)
+        dx_t = torch.nn.functional.pad(dx_t, [pad_w, pad_w, 0, 0], mode='reflect')
+        dx_t = torch.nn.functional.conv2d(dx_t, kernel_w)
+
+        dy_t = torch.nn.functional.pad(dy_t, [0, 0, pad_h, pad_h], mode='reflect')
+        dy_t = torch.nn.functional.conv2d(dy_t, kernel_h)
+        dy_t = torch.nn.functional.pad(dy_t, [pad_w, pad_w, 0, 0], mode='reflect')
+        dy_t = torch.nn.functional.conv2d(dy_t, kernel_w)
+
+        # Scale by alpha
+        dx_t = dx_t * alpha
+        dy_t = dy_t * alpha
+
+        # Build sampling grid: base grid + displacement
+        # grid_sample expects grid in [-1, 1] range
+        grid_y, grid_x = torch.meshgrid(
+            torch.linspace(-1, 1, h),
+            torch.linspace(-1, 1, w),
+            indexing='ij'
+        )
+        # Normalize displacement to [-1, 1] scale
+        grid_x = grid_x.unsqueeze(0).unsqueeze(0) + (dx_t / (w / 2))
+        grid_y = grid_y.unsqueeze(0).unsqueeze(0) + (dy_t / (h / 2))
+
+        # Combine into (1, H, W, 2) grid for grid_sample
+        grid = torch.cat([grid_x, grid_y], dim=1)  # (1, 2, H, W)
+        grid = grid.squeeze(0).permute(1, 2, 0)      # (H, W, 2)
+        grid = grid.unsqueeze(0)                       # (1, H, W, 2)
+
+        # Warp image (bilinear interpolation)
+        img_tensor = TF.to_tensor(image).unsqueeze(0)  # (1, 3, H, W)
+        img_warped = torch.nn.functional.grid_sample(
+            img_tensor, grid, mode='bilinear', padding_mode='zeros',
+            align_corners=True
+        )
+        image_out = TF.to_pil_image(img_warped.squeeze(0).clamp(0, 1))
+
+        # Warp mask (nearest interpolation to preserve binary values)
+        mask_tensor = TF.to_tensor(mask).unsqueeze(0)  # (1, 1, H, W)
+        mask_warped = torch.nn.functional.grid_sample(
+            mask_tensor, grid, mode='nearest', padding_mode='zeros',
+            align_corners=True
+        )
+        mask_out = TF.to_pil_image(mask_warped.squeeze(0))
+
+        return image_out, mask_out
+
+    @staticmethod
+    def _add_gaussian_noise(
+        image: Image.Image,
+        std: float = 0.02,
+    ) -> Image.Image:
+        """
+        Add Gaussian noise to an image (simulates scanner noise).
+        Applied in [0,1] tensor space, then converted back to PIL.
+
+        Args:
+            image: PIL Image (RGB).
+            std:   Standard deviation of the noise.
+
+        Returns:
+            Noisy PIL Image.
+        """
+        tensor = TF.to_tensor(image)  # (3, H, W), [0, 1]
+        noise = torch.randn_like(tensor) * std
+        noisy = (tensor + noise).clamp(0, 1)
+        return TF.to_pil_image(noisy)
 
 
 # ─── DataLoader Factory Functions ────────────────────────────────────────────
