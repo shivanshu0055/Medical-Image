@@ -140,6 +140,111 @@ class DecoderBlock(nn.Module):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Attention Gate (Additive Attention — Oktay et al., 2018)
+#
+#  Filters skip connection features using a gating signal from the deeper
+#  decoder layer. Irrelevant background features are suppressed (assigned weights
+#  near 0), while salient tumor region features are preserved (weights near 1).
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AttentionGate(nn.Module):
+    """
+    Additive Attention Gate (Oktay et al., 2018: 'Attention U-Net').
+
+    Args:
+        gate_channels:  Number of channels in gating signal g (from decoder level below).
+        skip_channels:  Number of channels in skip connection x (from encoder).
+        inter_channels: Intermediate projection channels (defaults to skip_channels // 2).
+    """
+
+    def __init__(self, gate_channels: int, skip_channels: int, inter_channels: int | None = None):
+        super().__init__()
+        if inter_channels is None:
+            inter_channels = max(skip_channels // 2, 1)
+
+        # W_g: projects gating signal g to inter_channels
+        self.W_g = nn.Sequential(
+            nn.Conv2d(gate_channels, inter_channels, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.BatchNorm2d(inter_channels),
+        )
+
+        # W_x: projects encoder skip features x to inter_channels
+        self.W_x = nn.Sequential(
+            nn.Conv2d(skip_channels, inter_channels, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.BatchNorm2d(inter_channels),
+        )
+
+        # psi: collapses to 1-channel spatial attention coefficient map
+        self.psi = nn.Sequential(
+            nn.Conv2d(inter_channels, 1, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.BatchNorm2d(1),
+            nn.Sigmoid(),
+        )
+
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, g: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            g: Gating signal from decoder level below (B, gate_channels, H_g, W_g).
+            x: Skip connection features from encoder (B, skip_channels, H_x, W_x).
+
+        Returns:
+            Attention-weighted skip tensor (B, skip_channels, H_x, W_x).
+        """
+        # Align spatial dimensions of g to match x if different
+        if g.shape[2:] != x.shape[2:]:
+            g = F.interpolate(g, size=x.shape[2:], mode="bilinear", align_corners=True)
+
+        g1 = self.W_g(g)
+        x1 = self.W_x(x)
+        net = self.relu(g1 + x1)
+        alpha = self.psi(net)   # (B, 1, H_x, W_x) in [0, 1]
+        self.last_alpha = alpha # cached for attention map visualization
+
+        return x * alpha
+
+
+class AttentionDecoderBlock(nn.Module):
+    """
+    One step of the Attention U-Net decoder:
+      1. Upsample decoder feature map x from previous step / bottleneck.
+      2. Filter encoder skip features using AttentionGate(g=x, x=skip).
+      3. Concatenate gated skip and upsampled decoder features along channels.
+      4. DoubleConv to combine and refine.
+    """
+
+    def __init__(self, gate_channels: int, skip_channels: int, out_channels: int):
+        super().__init__()
+        self.upsample = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+        self.attn = AttentionGate(
+            gate_channels=gate_channels,
+            skip_channels=skip_channels,
+            inter_channels=max(skip_channels // 2, 1),
+        )
+        self.conv = DoubleConv(gate_channels + skip_channels, out_channels)
+
+    def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x:    Decoder features from previous stage or bottleneck (B, gate_channels, H, W).
+            skip: Encoder skip features (B, skip_channels, 2H, 2W).
+        """
+        x = self.upsample(x)  # double spatial size
+
+        if x.shape[2:] != skip.shape[2:]:
+            x = F.interpolate(x, size=skip.shape[2:], mode="bilinear", align_corners=True)
+
+        # Gate the skip connection before concatenation
+        gated_skip = self.attn(g=x, x=skip)
+
+        # Concatenate along channel dimension
+        x = torch.cat([gated_skip, x], dim=1)
+
+        return self.conv(x)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  The Full U-Net
 #
 #  With base_features=32, the channel sizes look like this:
@@ -240,20 +345,123 @@ class UNet(nn.Module):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Attention U-Net (Oktay et al., 2018)
+#
+#  Incorporates Attention Gates onto each skip connection.
+#  Exact same encoder, bottleneck, and channel progression as standard U-Net,
+#  but each skip connection is dynamically weighted by the decoder gating signal.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AttentionUNet(nn.Module):
+    """
+    Attention U-Net for binary brain tumor segmentation.
+
+    Uses Attention Gates to suppress irrelevant background regions and
+    highlight tumor features before concatenating skip connections.
+
+    Args:
+        in_channels:   Number of input channels (3 for RGB).
+        out_channels:  Number of output channels (1 for binary mask).
+        base_features: Starting number of feature maps. Doubles at each encoder level.
+                       Default 32 → sizes: 32, 64, 128, 256, 512.
+    """
+
+    def __init__(self, in_channels: int = 3, out_channels: int = 1, base_features: int = 32):
+        super().__init__()
+
+        f = base_features
+
+        # ── Encoder (same as standard U-Net) ──────────────────────────────
+        self.enc1 = EncoderBlock(in_channels, f)       # 3   → 32
+        self.enc2 = EncoderBlock(f,           f * 2)   # 32  → 64
+        self.enc3 = EncoderBlock(f * 2,       f * 4)   # 64  → 128
+        self.enc4 = EncoderBlock(f * 4,       f * 8)   # 128 → 256
+
+        # ── Bottleneck (bottom of the U) ──────────────────────────────────
+        self.bottleneck = DoubleConv(f * 8, f * 16)   # 256 → 512
+
+        # ── Decoder with Attention Gates (going up) ────────────────────────
+        # dec4: gating signal from bottleneck (512), skip from enc4 (256) -> out (256)
+        self.dec4 = AttentionDecoderBlock(gate_channels=f * 16, skip_channels=f * 8, out_channels=f * 8)
+        # dec3: gating signal from dec4 (256), skip from enc3 (128) -> out (128)
+        self.dec3 = AttentionDecoderBlock(gate_channels=f * 8,  skip_channels=f * 4, out_channels=f * 4)
+        # dec2: gating signal from dec3 (128), skip from enc2 (64) -> out (64)
+        self.dec2 = AttentionDecoderBlock(gate_channels=f * 4,  skip_channels=f * 2, out_channels=f * 2)
+        # dec1: gating signal from dec2 (64), skip from enc1 (32) -> out (32)
+        self.dec1 = AttentionDecoderBlock(gate_channels=f * 2,  skip_channels=f,     out_channels=f)
+
+        # ── Output Layer ──────────────────────────────────────────────────
+        self.output_conv = nn.Conv2d(f, out_channels, kernel_size=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass through Attention U-Net.
+
+        Args:
+            x: Input tensor of shape (batch, 3, 256, 256).
+
+        Returns:
+            Logits tensor of shape (batch, 1, 256, 256).
+        """
+        # ── Encoder ──
+        skip1, x = self.enc1(x)   # skip1: (B, 32,  256, 256)
+        skip2, x = self.enc2(x)   # skip2: (B, 64,  128, 128)
+        skip3, x = self.enc3(x)   # skip3: (B, 128,  64,  64)
+        skip4, x = self.enc4(x)   # skip4: (B, 256,  32,  32)
+
+        # ── Bottleneck ──
+        x = self.bottleneck(x)    # x: (B, 512, 16, 16)
+
+        # ── Attention-Gated Decoder ──
+        x = self.dec4(x, skip4)   # x: (B, 256, 32,  32)
+        x = self.dec3(x, skip3)   # x: (B, 128, 64,  64)
+        x = self.dec2(x, skip2)   # x: (B, 64,  128, 128)
+        x = self.dec1(x, skip1)   # x: (B, 32,  256, 256)
+
+        # ── Output ──
+        return self.output_conv(x)  # (B, 1, 256, 256) — raw logits
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Convenience Functions
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_unet(config: dict | None = None) -> UNet:
+def build_attention_unet(config: dict | None = None) -> AttentionUNet:
     """
-    Build a U-Net model using settings from config.yaml.
+    Build an Attention U-Net model using settings from config.yaml.
 
     Args:
         config: The 'segmentation' section of config.yaml.
                 If None, uses default values.
 
     Returns:
-        UNet model (not yet trained, weights are random).
+        AttentionUNet model (not yet trained, weights are random).
     """
+    if config is None:
+        return AttentionUNet(in_channels=3, out_channels=1, base_features=32)
+
+    return AttentionUNet(
+        in_channels=config.get("in_channels", 3),
+        out_channels=config.get("out_channels", 1),
+        base_features=config.get("base_features", 32),
+    )
+
+
+def build_unet(config: dict | None = None) -> UNet | AttentionUNet:
+    """
+    Build a U-Net model using settings from config.yaml.
+    If config['architecture'] == 'attention_unet', builds an AttentionUNet.
+
+    Args:
+        config: The 'segmentation' section of config.yaml.
+                If None, uses default values.
+
+    Returns:
+        UNet or AttentionUNet model (not yet trained, weights are random).
+    """
+    if config is not None and config.get("architecture", "").lower() == "attention_unet":
+        return build_attention_unet(config)
+
     if config is None:
         return UNet(in_channels=3, out_channels=1, base_features=32)
 

@@ -71,14 +71,59 @@ class SegmentationAgent:
 
         device = torch.device(self.device_str if torch.cuda.is_available() else "cpu")
 
-        model = build_unet(self.seg_cfg)
-        model.load_state_dict(torch.load(weights_path, map_location=device))
+        checkpoint = torch.load(weights_path, map_location=device)
+        state_dict = (
+            checkpoint["model_state_dict"]
+            if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint
+            else checkpoint
+        )
+
+        # Detect architecture and base_features from checkpoint
+        has_geo_keys = any("geo_conv" in k for k in state_dict.keys())
+        has_attn_keys = any("attn.W_g" in k or "attn.psi" in k for k in state_dict.keys())
+        has_unet_keys = any("conv.block" in k for k in state_dict.keys()) and not has_attn_keys
+
+        if has_geo_keys:
+            arch_type = "geosample_unet"
+        elif has_attn_keys:
+            arch_type = "attention_unet"
+        elif has_unet_keys:
+            arch_type = "unet"
+        else:
+            cfg_arch = self.seg_cfg.get("architecture", "").lower()
+            if "attention" in cfg_arch or "attention" in weights_path.name.lower():
+                arch_type = "attention_unet"
+            elif "geosample" in cfg_arch or "geosample" in weights_path.name.lower():
+                arch_type = "geosample_unet"
+            else:
+                arch_type = "unet"
+
+        model_cfg = dict(self.seg_cfg)
+        if "output_conv.weight" in state_dict:
+            model_cfg["base_features"] = state_dict["output_conv.weight"].shape[1]
+
+        if arch_type == "geosample_unet":
+            from modules.geosample_unet import build_geosample_unet
+            model = build_geosample_unet(model_cfg)
+            arch_name = f"GeoSampleUNet (base_features={model_cfg.get('base_features')})"
+        elif arch_type == "attention_unet":
+            from modules.unet import build_attention_unet
+            model = build_attention_unet(model_cfg)
+            arch_name = f"Attention UNet (base_features={model_cfg.get('base_features')})"
+        else:
+            model = build_unet(model_cfg)
+            arch_name = f"Standard UNet (base_features={model_cfg.get('base_features')})"
+
+        # strict=False allows loading checkpoints trained with auxiliary heads (e.g. Run 3)
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+        if missing_keys:
+            print(f"[SegmentationAgent] Note: missing keys: {missing_keys}")
         model = model.to(device)
         model.eval()   # inference mode
 
         self._model = model
         self._device = device
-        print(f"[SegmentationAgent] Model loaded from {weights_path} on {device}")
+        print(f"[SegmentationAgent] {arch_name} loaded from {weights_path} on {device}")
 
     def run(self, state: dict) -> dict:
         """
