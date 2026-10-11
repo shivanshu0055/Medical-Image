@@ -235,8 +235,14 @@ def train_one_epoch(
         # autocast automatically decides which ops to run in FP16 vs FP32
         # for best accuracy + speed. FP16 uses half the VRAM of FP32.
         with autocast():
-            logits = model(images)         # (B, 1, 256, 256)
-            loss   = criterion(logits, masks)
+            output = model(images)
+            if isinstance(output, (list, tuple)):
+                # Deep supervision: average loss across all auxiliary heads
+                loss = sum(criterion(out, masks) for out in output) / len(output)
+                logits = output[-1]   # track metrics on the most refined head (X_0,4)
+            else:
+                logits = output
+                loss   = criterion(logits, masks)
 
         # ── Backward pass (compute gradients) ─────────────────────────────
         # scaler handles FP16 gradient scaling to prevent underflow
@@ -286,8 +292,12 @@ def validate_one_epoch(
             masks  = masks.to(device,  non_blocking=True)
 
             with autocast():
-                logits = model(images)
-                loss   = criterion(logits, masks)
+                output = model(images)
+                if isinstance(output, (list, tuple)):
+                    logits = output[-1]
+                else:
+                    logits = output
+                loss = criterion(logits, masks)
 
             total_loss += loss.item()
             total_dice += dice_score(logits, masks)
