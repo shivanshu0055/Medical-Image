@@ -48,17 +48,21 @@ class DiceBCELoss(nn.Module):
 
     Dice loss: 1 - (2 * intersection) / (prediction_sum + target_sum + eps)
     BCE loss:  standard pixel-wise binary cross-entropy
-    Combined:  0.5 * BCE + 0.5 * Dice
+    Combined:  bce_weight * BCE + dice_weight * Dice
     """
 
-    def __init__(self, smooth: float = 1.0):
+    def __init__(self, smooth: float = 1.0, bce_weight: float = 0.5, dice_weight: float = 0.5):
         """
         Args:
             smooth: Small value added to numerator and denominator to avoid
                     division by zero. Also called epsilon.
+            bce_weight: Weight multiplier for BCE loss (default 0.5).
+            dice_weight: Weight multiplier for Dice loss (default 0.5).
         """
         super().__init__()
         self.smooth = smooth
+        self.bce_weight = bce_weight
+        self.dice_weight = dice_weight
         # BCEWithLogitsLoss combines sigmoid + BCE in one step.
         # This is numerically more stable than applying sigmoid separately.
         self.bce = nn.BCEWithLogitsLoss()
@@ -92,7 +96,7 @@ class DiceBCELoss(nn.Module):
 
         dice_loss = 1.0 - dice_score.mean()   # loss = 1 - score (we minimize loss)
 
-        return 0.5 * bce_loss + 0.5 * dice_loss
+        return self.bce_weight * bce_loss + self.dice_weight * dice_loss
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -306,6 +310,8 @@ def train_segmentation(
     lr_scheduler_type: str = "cosine",
     checkpoint_path: str  = "models/segmentation/unet_best.pth",
     device_str:     str   = "cuda",
+    bce_weight:     float = 0.5,
+    dice_weight:    float = 0.5,
 ) -> dict:
     """
     Full training loop for the U-Net segmentation model.
@@ -320,6 +326,8 @@ def train_segmentation(
         lr_scheduler_type:  'cosine' (CosineAnnealingLR) or 'plateau' (ReduceLROnPlateau).
         checkpoint_path:    Where to save the best model.
         device_str:         'cuda' or 'cpu'.
+        bce_weight:         Weight multiplier for BCE loss (default 0.5).
+        dice_weight:        Weight multiplier for Dice loss (default 0.5).
 
     Returns:
         Dictionary with training history:
@@ -349,7 +357,7 @@ def train_segmentation(
         scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=3)
 
     # ── Loss Function ─────────────────────────────────────────────────────────
-    criterion = DiceBCELoss()
+    criterion = DiceBCELoss(bce_weight=bce_weight, dice_weight=dice_weight)
 
     # ── Mixed Precision Scaler ────────────────────────────────────────────────
     # Required for FP16 training — manages gradient scaling

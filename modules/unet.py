@@ -149,16 +149,33 @@ class DecoderBlock(nn.Module):
 
 class AttentionGate(nn.Module):
     """
-    Additive Attention Gate (Oktay et al., 2018: 'Attention U-Net').
+    Additive Attention Gate with optional Residual Bypass.
+
+    When residual=True (recommended):
+      output = x + (x * alpha)
+      The original skip connection features (x) are 100% preserved,
+      while the attention map (alpha) adds a salience boost on tumor regions.
+      This completely prevents boundary shrinkage on blurry/infiltrative tumor borders.
+
+    When residual=False (standard Oktay et al., 2018):
+      output = x * alpha
 
     Args:
         gate_channels:  Number of channels in gating signal g (from decoder level below).
         skip_channels:  Number of channels in skip connection x (from encoder).
         inter_channels: Intermediate projection channels (defaults to skip_channels // 2).
+        residual:       Whether to add a residual identity bypass around the gate.
     """
 
-    def __init__(self, gate_channels: int, skip_channels: int, inter_channels: int | None = None):
+    def __init__(
+        self,
+        gate_channels: int,
+        skip_channels: int,
+        inter_channels: int | None = None,
+        residual: bool = True,
+    ):
         super().__init__()
+        self.residual = residual
         if inter_channels is None:
             inter_channels = max(skip_channels // 2, 1)
 
@@ -190,7 +207,7 @@ class AttentionGate(nn.Module):
             x: Skip connection features from encoder (B, skip_channels, H_x, W_x).
 
         Returns:
-            Attention-weighted skip tensor (B, skip_channels, H_x, W_x).
+            Attention-modulated skip tensor (B, skip_channels, H_x, W_x).
         """
         # Align spatial dimensions of g to match x if different
         if g.shape[2:] != x.shape[2:]:
@@ -202,6 +219,8 @@ class AttentionGate(nn.Module):
         alpha = self.psi(net)   # (B, 1, H_x, W_x) in [0, 1]
         self.last_alpha = alpha # cached for attention map visualization
 
+        if self.residual:
+            return x + (x * alpha)
         return x * alpha
 
 
@@ -214,13 +233,20 @@ class AttentionDecoderBlock(nn.Module):
       4. DoubleConv to combine and refine.
     """
 
-    def __init__(self, gate_channels: int, skip_channels: int, out_channels: int):
+    def __init__(
+        self,
+        gate_channels: int,
+        skip_channels: int,
+        out_channels: int,
+        residual: bool = True,
+    ):
         super().__init__()
         self.upsample = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
         self.attn = AttentionGate(
             gate_channels=gate_channels,
             skip_channels=skip_channels,
             inter_channels=max(skip_channels // 2, 1),
+            residual=residual,
         )
         self.conv = DoubleConv(gate_channels + skip_channels, out_channels)
 
@@ -366,10 +392,11 @@ class AttentionUNet(nn.Module):
                        Default 32 → sizes: 32, 64, 128, 256, 512.
     """
 
-    def __init__(self, in_channels: int = 3, out_channels: int = 1, base_features: int = 32):
+    def __init__(self, in_channels: int = 3, out_channels: int = 1, base_features: int = 32, residual: bool = True):
         super().__init__()
 
         f = base_features
+        self.residual = residual
 
         # ── Encoder (same as standard U-Net) ──────────────────────────────
         self.enc1 = EncoderBlock(in_channels, f)       # 3   → 32
@@ -382,13 +409,13 @@ class AttentionUNet(nn.Module):
 
         # ── Decoder with Attention Gates (going up) ────────────────────────
         # dec4: gating signal from bottleneck (512), skip from enc4 (256) -> out (256)
-        self.dec4 = AttentionDecoderBlock(gate_channels=f * 16, skip_channels=f * 8, out_channels=f * 8)
+        self.dec4 = AttentionDecoderBlock(gate_channels=f * 16, skip_channels=f * 8, out_channels=f * 8, residual=residual)
         # dec3: gating signal from dec4 (256), skip from enc3 (128) -> out (128)
-        self.dec3 = AttentionDecoderBlock(gate_channels=f * 8,  skip_channels=f * 4, out_channels=f * 4)
+        self.dec3 = AttentionDecoderBlock(gate_channels=f * 8,  skip_channels=f * 4, out_channels=f * 4, residual=residual)
         # dec2: gating signal from dec3 (128), skip from enc2 (64) -> out (64)
-        self.dec2 = AttentionDecoderBlock(gate_channels=f * 4,  skip_channels=f * 2, out_channels=f * 2)
+        self.dec2 = AttentionDecoderBlock(gate_channels=f * 4,  skip_channels=f * 2, out_channels=f * 2, residual=residual)
         # dec1: gating signal from dec2 (64), skip from enc1 (32) -> out (32)
-        self.dec1 = AttentionDecoderBlock(gate_channels=f * 2,  skip_channels=f,     out_channels=f)
+        self.dec1 = AttentionDecoderBlock(gate_channels=f * 2,  skip_channels=f,     out_channels=f,     residual=residual)
 
         # ── Output Layer ──────────────────────────────────────────────────
         self.output_conv = nn.Conv2d(f, out_channels, kernel_size=1)
@@ -438,12 +465,13 @@ def build_attention_unet(config: dict | None = None) -> AttentionUNet:
         AttentionUNet model (not yet trained, weights are random).
     """
     if config is None:
-        return AttentionUNet(in_channels=3, out_channels=1, base_features=32)
+        return AttentionUNet(in_channels=3, out_channels=1, base_features=32, residual=True)
 
     return AttentionUNet(
         in_channels=config.get("in_channels", 3),
         out_channels=config.get("out_channels", 1),
         base_features=config.get("base_features", 32),
+        residual=config.get("residual", True),
     )
 
 
