@@ -390,11 +390,10 @@ def get_seg_dataloaders(
     val_split:   float = 0.1,
     seed:        int = 42,
     config_path: str = "configs/config.yaml",
+    use_test_as_val: bool = False,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
     """
     Create train, validation, and test DataLoaders for segmentation.
-
-    Splits the training set into train (90%) and val (10%) by default.
 
     Args:
         train_images_dir: Path to segmentation_task/train/images/
@@ -403,9 +402,13 @@ def get_seg_dataloaders(
         test_masks_dir:   Path to segmentation_task/test/masks/
         batch_size:       Images per batch (default 8 for 4GB VRAM).
         num_workers:      Parallel data loading workers.
-        val_split:        Fraction of training data to use for validation.
+        val_split:        Fraction of training data to use for validation (default 0.1).
+                          If val_split <= 0.0 or use_test_as_val is True, all training data
+                          is used for training, and the test set is used for validation.
         seed:             Random seed for reproducible splits.
         config_path:      Path to config.yaml.
+        use_test_as_val:  If True, uses 100% of training data for training and uses
+                          the hold-out test set as the validation set.
 
     Returns:
         (train_loader, val_loader, test_loader)
@@ -418,26 +421,6 @@ def get_seg_dataloaders(
         split="train", config_path=config_path,
     )
 
-    # Split into train and validation subsets
-    total = len(full_train)
-    val_size   = int(total * val_split)
-    train_size = total - val_size
-
-    # Use a fixed seed so the split is the same every run
-    generator = torch.Generator().manual_seed(seed)
-    train_subset, val_subset = random_split(full_train, [train_size, val_size], generator=generator)
-
-    # Override augmentation for the val subset: validation should not be augmented.
-    # We do this by setting the flag on the underlying dataset after splitting.
-    # (random_split returns Subset objects wrapping the original dataset)
-    # The simpler approach: create a separate val dataset with augment=False
-    val_dataset = SegmentationDataset(
-        train_images_dir, train_masks_dir,
-        split="val", augment=False, config_path=config_path,
-    )
-    # Use only the val indices from our split
-    val_dataset_subset = torch.utils.data.Subset(val_dataset, val_subset.indices)
-
     # Test dataset (no augmentation)
     test_dataset = SegmentationDataset(
         test_images_dir, test_masks_dir,
@@ -446,6 +429,36 @@ def get_seg_dataloaders(
 
     # pin_memory=True speeds up CPU→GPU transfer during training
     common_kwargs = dict(num_workers=num_workers, pin_memory=True)
+
+    # If using test set as validation (or val_split <= 0):
+    # Train on 100% of training data, validate directly on test set
+    if use_test_as_val or val_split <= 0.0:
+        train_loader = DataLoader(full_train,    batch_size=batch_size, shuffle=True,  **common_kwargs)
+        val_loader   = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, **common_kwargs)
+        test_loader  = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, **common_kwargs)
+
+        print(f"DataLoaders ready (100% Train Corpus + Test Set Validation):")
+        print(f"  Train : {len(full_train):4d} samples → {len(train_loader):3d} batches")
+        print(f"  Val   : {len(test_dataset):4d} samples → {len(val_loader):3d} batches (Test Set)")
+        print(f"  Test  : {len(test_dataset):4d} samples → {len(test_loader):3d} batches (Test Set)")
+
+        return train_loader, val_loader, test_loader
+
+    # Otherwise: Standard 90/10 random split of training directory
+    total = len(full_train)
+    val_size   = int(total * val_split)
+    train_size = total - val_size
+
+    # Use a fixed seed so the split is the same every run
+    generator = torch.Generator().manual_seed(seed)
+    train_subset, val_subset = random_split(full_train, [train_size, val_size], generator=generator)
+
+    # Separate val dataset with augment=False
+    val_dataset = SegmentationDataset(
+        train_images_dir, train_masks_dir,
+        split="val", augment=False, config_path=config_path,
+    )
+    val_dataset_subset = torch.utils.data.Subset(val_dataset, val_subset.indices)
 
     train_loader = DataLoader(train_subset,       batch_size=batch_size, shuffle=True,  **common_kwargs)
     val_loader   = DataLoader(val_dataset_subset, batch_size=batch_size, shuffle=False, **common_kwargs)
