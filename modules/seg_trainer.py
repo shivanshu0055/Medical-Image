@@ -322,6 +322,7 @@ def train_segmentation(
     device_str:     str   = "cuda",
     bce_weight:     float = 0.5,
     dice_weight:    float = 0.5,
+    optimizer:      torch.optim.Optimizer | None = None,
 ) -> dict:
     """
     Full training loop for the U-Net segmentation model.
@@ -331,13 +332,14 @@ def train_segmentation(
         train_loader:       Training DataLoader.
         val_loader:         Validation DataLoader.
         epochs:             Maximum number of training epochs.
-        learning_rate:      Adam optimizer learning rate.
+        learning_rate:      Adam optimizer learning rate (used if optimizer is None).
         patience:           Early stopping patience.
         lr_scheduler_type:  'cosine' (CosineAnnealingLR) or 'plateau' (ReduceLROnPlateau).
         checkpoint_path:    Where to save the best model.
         device_str:         'cuda' or 'cpu'.
         bce_weight:         Weight multiplier for BCE loss (default 0.5).
         dice_weight:        Weight multiplier for Dice loss (default 0.5).
+        optimizer:          Optional pre-configured optimizer (e.g. with differential LR).
 
     Returns:
         Dictionary with training history:
@@ -353,9 +355,10 @@ def train_segmentation(
     model = model.to(device)
 
     # ── Optimizer: Adam ───────────────────────────────────────────────────────
-    # Adam adapts the learning rate for each parameter individually.
-    # weight_decay=1e-5 is L2 regularization — gently penalizes large weights.
-    optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)
+    # If a preconfigured optimizer is provided (e.g. with differential LR parameter groups),
+    # use it; otherwise create standard Adam.
+    if optimizer is None:
+        optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)
 
     # ── Learning Rate Scheduler ───────────────────────────────────────────────
     if lr_scheduler_type.lower() == "cosine":
