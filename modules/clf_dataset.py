@@ -152,6 +152,7 @@ def create_classification_dataloaders(
     num_workers: int = 2,
     seed: int = 42,
     class_names: Sequence[str] = DEFAULT_CLASSES,
+    use_test_as_val: bool = False,
 ) -> tuple[DataLoader, DataLoader, Optional[DataLoader]]:
     """
     Create train, validation, and optional test DataLoaders.
@@ -159,12 +160,14 @@ def create_classification_dataloaders(
     Args:
         train_dir: Directory containing training images organized by class subfolders.
         test_dir: Optional directory containing test images organized by class subfolders.
-        val_ratio: Fraction of train images to reserve for validation (default: 0.15).
+        val_ratio: Fraction of train images to reserve for validation (default: 0.15). Ignored if use_test_as_val=True.
         batch_size: Batch size for loaders.
         image_size: Target square image dimension (default: 224).
         num_workers: DataLoader worker count.
         seed: Random seed for stratified splitting.
         class_names: Class subfolder names.
+        use_test_as_val: If True, uses 100% of training data for training and uses
+                          the hold-out test set as the validation set.
 
     Returns:
         tuple (train_loader, val_loader, test_loader)
@@ -172,6 +175,42 @@ def create_classification_dataloaders(
     train_samples = scan_dataset_dir(train_dir, class_names=class_names)
     if not train_samples:
         raise ValueError(f"No valid images found in train directory: {train_dir}")
+
+    train_transform = get_default_transforms(image_size=image_size, is_train=True)
+    val_transform = get_default_transforms(image_size=image_size, is_train=False)
+
+    if use_test_as_val:
+        if test_dir is None or not Path(test_dir).exists():
+            raise ValueError(f"test_dir must be valid when use_test_as_val is True: {test_dir}")
+        test_samples = scan_dataset_dir(test_dir, class_names=class_names)
+        if not test_samples:
+            raise ValueError(f"No valid images found in test directory: {test_dir}")
+
+        train_dataset = BRISCClassificationDataset(train_samples, transform=train_transform)
+        val_dataset = BRISCClassificationDataset(test_samples, transform=val_transform)
+
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=torch.cuda.is_available(),
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=torch.cuda.is_available(),
+        )
+        test_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=torch.cuda.is_available(),
+        )
+        return train_loader, val_loader, test_loader
 
     # Stratified Train/Val split to maintain balanced representation of all classes
     paths, labels = zip(*train_samples)
@@ -185,9 +224,6 @@ def create_classification_dataloaders(
 
     train_data = list(zip(train_paths, train_labels))
     val_data = list(zip(val_paths, val_labels))
-
-    train_transform = get_default_transforms(image_size=image_size, is_train=True)
-    val_transform = get_default_transforms(image_size=image_size, is_train=False)
 
     train_dataset = BRISCClassificationDataset(train_data, transform=train_transform)
     val_dataset = BRISCClassificationDataset(val_data, transform=val_transform)

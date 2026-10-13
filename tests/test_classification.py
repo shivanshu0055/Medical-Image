@@ -85,6 +85,35 @@ def test_classification_dataloaders():
     assert all(0 <= int(lbl) < 4 for lbl in labels)
 
 
+def test_classification_dataloaders_use_test_as_val():
+    """Verify DataLoaders with use_test_as_val=True loads 100% train data and uses test set as validation."""
+    train_dir = Path("data/raw/classification_task/train")
+    test_dir = Path("data/raw/classification_task/test")
+
+    if not train_dir.exists() or not test_dir.exists():
+        pytest.skip("BRISC classification dataset not found locally.")
+
+    train_loader, val_loader, test_loader = create_classification_dataloaders(
+        train_dir=train_dir,
+        test_dir=test_dir,
+        batch_size=4,
+        image_size=224,
+        num_workers=0,
+        use_test_as_val=True,
+    )
+
+    total_train = len(train_loader.dataset)
+    total_val = len(val_loader.dataset)
+    total_test = len(test_loader.dataset)
+
+    assert total_val == total_test, f"Val ({total_val}) and Test ({total_test}) should be identical"
+    assert total_train > total_val, "Train dataset should be larger than test dataset"
+
+    images, labels = next(iter(train_loader))
+    assert images.shape == (4, 3, 224, 224)
+    assert labels.shape == (4,)
+
+
 def test_training_step_gradient_flow():
     """Verify forward and backward pass compute valid gradients."""
     model = build_classifier(num_classes=4, pretrained=False)
