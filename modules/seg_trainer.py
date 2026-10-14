@@ -209,11 +209,12 @@ def train_one_epoch(
     criterion:   nn.Module,
     scaler:      GradScaler,
     device:      torch.device,
+    gradient_accumulation_steps: int = 1,
 ) -> tuple[float, float]:
     """
     Run one full pass through the training data.
 
-    Uses mixed precision (FP16) to save VRAM on RTX 2050.
+    Uses mixed precision (FP16) and optional gradient accumulation.
 
     Returns:
         (average_loss, average_dice_score) for this epoch.
@@ -224,16 +225,14 @@ def train_one_epoch(
     total_dice  = 0.0
     num_batches = len(loader)
 
+    optimizer.zero_grad()
+
     for batch_idx, (images, masks) in enumerate(loader):
         # Move data to GPU
         images = images.to(device, non_blocking=True)
         masks  = masks.to(device,  non_blocking=True)
 
-        optimizer.zero_grad()   # clear gradients from last step
-
         # ── Forward pass with FP16 (mixed precision) ──────────────────────
-        # autocast automatically decides which ops to run in FP16 vs FP32
-        # for best accuracy + speed. FP16 uses half the VRAM of FP32.
         with autocast():
             output = model(images)
             if isinstance(output, (list, tuple)):
@@ -244,11 +243,16 @@ def train_one_epoch(
                 logits = output
                 loss   = criterion(logits, masks)
 
+            # Scale loss for gradient accumulation
+            loss_accum = loss / max(gradient_accumulation_steps, 1)
+
         # ── Backward pass (compute gradients) ─────────────────────────────
-        # scaler handles FP16 gradient scaling to prevent underflow
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
+        scaler.scale(loss_accum).backward()
+
+        if (batch_idx + 1) % gradient_accumulation_steps == 0 or (batch_idx + 1) == num_batches:
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
 
         # Track metrics
         with torch.no_grad():
@@ -323,6 +327,7 @@ def train_segmentation(
     bce_weight:     float = 0.5,
     dice_weight:    float = 0.5,
     optimizer:      torch.optim.Optimizer | None = None,
+    gradient_accumulation_steps: int = 1,
 ) -> dict:
     """
     Full training loop for the U-Net segmentation model.
@@ -340,6 +345,7 @@ def train_segmentation(
         bce_weight:         Weight multiplier for BCE loss (default 0.5).
         dice_weight:        Weight multiplier for Dice loss (default 0.5).
         optimizer:          Optional pre-configured optimizer (e.g. with differential LR).
+        gradient_accumulation_steps: Micro-batch accumulation steps (default 1).
 
     Returns:
         Dictionary with training history:
@@ -383,6 +389,8 @@ def train_segmentation(
     history = {"train_loss": [], "val_loss": [], "train_dice": [], "val_dice": []}
 
     print(f"\nStarting training: {epochs} max epochs, patience={patience}, scheduler={lr_scheduler_type}")
+    if gradient_accumulation_steps > 1:
+        print(f"Gradient accumulation: {gradient_accumulation_steps} steps (Effective batch size = {train_loader.batch_size * gradient_accumulation_steps})")
     print("=" * 65)
 
     for epoch in range(1, epochs + 1):
@@ -392,7 +400,8 @@ def train_segmentation(
         # ── Train ────────────────────────────────────────────────────────
         print(f"\nEpoch {epoch:02d}/{epochs}  [lr: {current_lr:.2e}]")
         train_loss, train_dice = train_one_epoch(
-            model, train_loader, optimizer, criterion, scaler, device
+            model, train_loader, optimizer, criterion, scaler, device,
+            gradient_accumulation_steps=gradient_accumulation_steps,
         )
 
         # ── Validate ─────────────────────────────────────────────────────

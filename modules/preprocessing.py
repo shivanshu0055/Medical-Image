@@ -89,12 +89,12 @@ class MRIPreprocessor:
         mask = preprocessor.preprocess_mask(mask_path)
     """
 
-    def __init__(self, config_path: str = "configs/config.yaml"):
+    def __init__(self, config_path: str = "configs/config.yaml", image_size_seg: Optional[int] = None):
         cfg = _load_config(config_path)
         pp = cfg["preprocessing"]
 
         self.size_clf = pp["image_size_clf"]       # 224 for EfficientNet-B0
-        self.size_seg = pp["image_size_seg"]       # 256 for U-Net
+        self.size_seg = image_size_seg if image_size_seg is not None else pp["image_size_seg"]
 
         # ImageNet stats — used ONLY for classification (pretrained backbone)
         self.imagenet_mean = pp["normalize_mean"]  # [0.485, 0.456, 0.406]

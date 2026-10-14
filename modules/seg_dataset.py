@@ -54,6 +54,7 @@ class SegmentationDataset(Dataset):
         split: Literal["train", "val", "test"] = "train",
         augment: bool | None = None,
         config_path: str = "configs/config.yaml",
+        image_size: Optional[int] = None,
     ):
         """
         Args:
@@ -63,11 +64,13 @@ class SegmentationDataset(Dataset):
                          Augmentation is ON for 'train', OFF for others.
             augment:     Override augmentation flag. If None, follows split.
             config_path: Path to config.yaml for preprocessing settings.
+            image_size:  Optional override for square spatial resolution (e.g. 512).
         """
         self.images_dir = Path(images_dir)
         self.masks_dir  = Path(masks_dir)
         self.split      = split
-        self.preprocessor = MRIPreprocessor(config_path)
+        self.preprocessor = MRIPreprocessor(config_path, image_size_seg=image_size)
+        self.image_size = image_size if image_size is not None else self.preprocessor.size_seg
 
         # Augmentation is applied during training only
         # (we don't want to randomly flip test images — results must be consistent)
@@ -152,10 +155,10 @@ class SegmentationDataset(Dataset):
     def _pil_to_seg_tensor(self, image: Image.Image) -> torch.Tensor:
         """
         Convert a PIL image to a segmentation-mode tensor.
-        Resize to 256×256, convert to float [0,1]. No ImageNet normalization.
+        Resize to target size (self.image_size), convert to float [0,1]. No ImageNet normalization.
         """
         seg_transform = transforms.Compose([
-            transforms.Resize((256, 256),
+            transforms.Resize((self.image_size, self.image_size),
                                interpolation=transforms.InterpolationMode.BILINEAR,
                                antialias=True),
             transforms.ToTensor(),   # [0,255] → [0.0,1.0] float32
@@ -168,7 +171,7 @@ class SegmentationDataset(Dataset):
         Resize with NEAREST (preserves binary values), then threshold at 0.5.
         """
         mask_transform = transforms.Compose([
-            transforms.Resize((256, 256),
+            transforms.Resize((self.image_size, self.image_size),
                                interpolation=transforms.InterpolationMode.NEAREST),
             transforms.ToTensor(),   # [0,255] → [0.0,1.0]
         ])
@@ -391,6 +394,7 @@ def get_seg_dataloaders(
     seed:        int = 42,
     config_path: str = "configs/config.yaml",
     use_test_as_val: bool = False,
+    image_size: Optional[int] = None,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
     """
     Create train, validation, and test DataLoaders for segmentation.
@@ -409,6 +413,7 @@ def get_seg_dataloaders(
         config_path:      Path to config.yaml.
         use_test_as_val:  If True, uses 100% of training data for training and uses
                           the hold-out test set as the validation set.
+        image_size:       Optional square resolution override (e.g. 512).
 
     Returns:
         (train_loader, val_loader, test_loader)
@@ -418,13 +423,13 @@ def get_seg_dataloaders(
     # Full training dataset (augmentation ON)
     full_train = SegmentationDataset(
         train_images_dir, train_masks_dir,
-        split="train", config_path=config_path,
+        split="train", config_path=config_path, image_size=image_size,
     )
 
     # Test dataset (no augmentation)
     test_dataset = SegmentationDataset(
         test_images_dir, test_masks_dir,
-        split="test", augment=False, config_path=config_path,
+        split="test", augment=False, config_path=config_path, image_size=image_size,
     )
 
     # pin_memory=True speeds up CPU→GPU transfer during training
@@ -456,7 +461,7 @@ def get_seg_dataloaders(
     # Separate val dataset with augment=False
     val_dataset = SegmentationDataset(
         train_images_dir, train_masks_dir,
-        split="val", augment=False, config_path=config_path,
+        split="val", augment=False, config_path=config_path, image_size=image_size,
     )
     val_dataset_subset = torch.utils.data.Subset(val_dataset, val_subset.indices)
 
